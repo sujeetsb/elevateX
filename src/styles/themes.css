@@ -1,0 +1,188 @@
+/*
+ * ElevateX Design Tokens
+ *
+ * Dark theme: Linear · Vercel · Raycast · GitHub-dark hierarchy
+ * Light theme: unchanged baseline (Notion / Stripe inspired)
+ *
+ * Surface elevation (dark):
+ *   surface-0  page canvas
+ *   surface-1  sidebar · sections
+ *   surface-2  cards · panels
+ *   surface-3  popovers · dropdowns · tooltips
+ *   surface-4  modals · dialogs
+ */
+
+/* ══════════════════════════════════════════════════════════════
+   DARK THEME — premium layered surfaces
+   ══════════════════════════════════════════════════════════════ */
+:root,
+[data-theme="dark"] {
+  /* ── Surface hierarchy (no #000) ─────────────────────────── */
+  --cp-surface-0: #0a0a0c;
+  --cp-surface-1: #0f0f12;
+  --cp-surface-2: #151518;
+  --cp-surface-3: #1a1a1e;
+  --cp-surface-4: #202024;
+
+  /* Legacy aliases → surface map (backward compatible) */
+  --cp-bg-base:        var(--cp-surface-0);
+  --cp-bg-subtle:      var(--cp-surface-1);
+  --cp-bg-card:        var(--cp-surface-2);
+  --cp-bg-card-solid:  var(--cp-surface-2);
+  --cp-bg-elevated:    var(--cp-surface-3);
+  --cp-bg-input:       #121214;
+  --cp-bg-hover:       #1e1e22;
+  --cp-bg-active:      #26262b;
+
+  /* ── Borders — white/5 · white/8 · white/10 ──────────────── */
+  --cp-border-subtle:  rgba(255, 255, 255, 0.04);
+  --cp-border:         rgba(255, 255, 255, 0.06);
+  --cp-border-strong:  rgba(255, 255, 255, 0.10);
+  --cp-border-accent:  rgba(99, 102, 241, 0.32);
+
+  /* ── Typography — soft zinc (avoid pure #fff) ────────────── */
+  --cp-text-primary:   #f4f4f5;   /* zinc-100 */
+  --cp-text-secondary: #d4d4d8;   /* zinc-300 */
+  --cp-text-muted:     #a1a1aa;   /* zinc-400 */
+  --cp-text-faint:     #71717a;   /* zinc-500 */
+  --cp-text-inverse:   #18181b;
+
+  /* ── Accent — refined indigo (Linear-adjacent) ───────────── */
+  --cp-accent:         #6366f1;
+  --cp-accent-hover:   #818cf8;
+  --cp-accent-light:   #a5b4fc;
+  --cp-accent-muted:   rgba(99, 102, 241, 0.14);
+  --cp-accent-bg:      rgba(99, 102, 241, 0.10);
+
+  /* ── Semantic ────────────────────────────────────────────── */
+  --cp-success:        #34d399;
+  --cp-success-muted:  rgba(52, 211, 153, 0.10);
+  --cp-warning:        #fbbf24;
+  --cp-warning-muted:  rgba(251, 191, 36, 0.10);
+  --cp-danger:         #f87171;
+  --cp-danger-muted:   rgba(248, 113, 113, 0.10);
+  --cp-info:           #38bdf8;
+  --cp-info-muted:     rgba(56, 189, 248, 0.10);
+
+  /* ── Elevation shadows + inset highlight ─────────────────── */
+  --cp-shadow-inset:   inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  --cp-shadow-xs:      var(--cp-shadow-inset), 0 1px 2px rgba(0, 0, 0, 0.40);
+  --cp-shadow-sm:      var(--cp-shadow-inset), 0 1px 3px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --cp-shadow-md:      var(--cp-shadow-inset), 0 4px 16px rgba(0, 0, 0, 0.50), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  --cp-shadow-lg:      var(--cp-shadow-inset), 0 16px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --cp-shadow-focus:   0 0 0 2px var(--cp-surface-0), 0 0 0 4px rgba(99, 102, 241, 0.35);
+
+  /* Per-surface elevation presets */
+  --cp-elevation-1: var(--cp-shadow-xs);
+  --cp-elevation-2: var(--cp-shadow-sm);
+  --cp-elevation-3: var(--cp-shadow-md);
+  --cp-elevation-4: var(--cp-shadow-lg);
+
+  /* ── Ambient page tint (barely visible) ──────────────────── */
+  --cp-aurora-1: rgba(99, 102, 241, 0.04);
+  --cp-aurora-2: rgba(56, 189, 248, 0.025);
+  --cp-aurora-3: rgba(139, 92, 246, 0.025);
+  --cp-aurora-4: transparent;
+
+  --cp-overlay: rgba(0, 0, 0, 0.72);
+
+  /* Code blocks */
+  --cp-code-bg:     #121214;
+  --cp-code-border: rgba(255, 255, 255, 0.06);
+  --cp-code-text:   #c4b5fd;
+
+  /* Radius — 8px grid */
+  --cp-radius-sm:  0.5rem;
+  --cp-radius-md:  0.625rem;
+  --cp-radius-lg:  0.75rem;
+  --cp-radius-xl:  1rem;
+
+  color-scheme: dark;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   LIGHT THEME
+   ══════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  --cp-surface-0: #fafafa;
+  --cp-surface-1: #f4f4f5;
+  --cp-surface-2: #ffffff;
+  --cp-surface-3: #ffffff;
+  --cp-surface-4: #ffffff;
+
+  --cp-bg-base:        var(--cp-surface-0);
+  --cp-bg-subtle:      var(--cp-surface-1);
+  --cp-bg-card:        var(--cp-surface-2);
+  --cp-bg-card-solid:  var(--cp-surface-2);
+  --cp-bg-elevated:    var(--cp-surface-3);
+  --cp-bg-input:       #ffffff;
+  --cp-bg-hover:       #f4f4f5;
+  --cp-bg-active:      #e4e4e7;
+
+  --cp-border-subtle:  #f0f0f2;
+  --cp-border:         #e4e4e7;
+  --cp-border-strong:  #d4d4d8;
+  --cp-border-accent:  rgba(124, 58, 237, 0.28);
+
+  --cp-text-primary:   #18181b;
+  --cp-text-secondary: #3f3f46;
+  --cp-text-muted:     #71717a;
+  --cp-text-faint:     #a1a1aa;
+  --cp-text-inverse:   #fafafa;
+
+  --cp-accent:         #7c3aed;
+  --cp-accent-hover:   #6d28d9;
+  --cp-accent-light:   #6d28d9;
+  --cp-accent-muted:   rgba(124, 58, 237, 0.08);
+  --cp-accent-bg:      rgba(124, 58, 237, 0.06);
+
+  --cp-success:        #059669;
+  --cp-success-muted:  rgba(5, 150, 105, 0.08);
+  --cp-warning:        #d97706;
+  --cp-warning-muted:  rgba(217, 119, 6, 0.08);
+  --cp-danger:         #dc2626;
+  --cp-danger-muted:   rgba(220, 38, 38, 0.08);
+  --cp-info:           #0284c7;
+  --cp-info-muted:     rgba(2, 132, 199, 0.08);
+
+  --cp-shadow-inset:   none;
+  --cp-shadow-xs:      0 1px 2px rgba(0, 0, 0, 0.04);
+  --cp-shadow-sm:      0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --cp-shadow-md:      0 4px 12px rgba(0, 0, 0, 0.06);
+  --cp-shadow-lg:      0 12px 32px rgba(0, 0, 0, 0.08);
+  --cp-shadow-focus:   0 0 0 3px rgba(124, 58, 237, 0.18);
+
+  --cp-elevation-1: var(--cp-shadow-xs);
+  --cp-elevation-2: var(--cp-shadow-sm);
+  --cp-elevation-3: var(--cp-shadow-md);
+  --cp-elevation-4: var(--cp-shadow-lg);
+
+  --cp-aurora-1: rgba(124, 58, 237, 0.03);
+  --cp-aurora-2: rgba(2, 132, 199, 0.02);
+  --cp-aurora-3: rgba(99, 102, 241, 0.02);
+  --cp-aurora-4: transparent;
+
+  --cp-overlay: rgba(0, 0, 0, 0.45);
+
+  --cp-code-bg:     #f4f4f5;
+  --cp-code-border: #e4e4e7;
+  --cp-code-text:   #6d28d9;
+
+  color-scheme: light;
+}
+
+/* ── Theme transitions ─────────────────────────────────────── */
+html[data-theme] *,
+html[data-theme] *::before,
+html[data-theme] *::after {
+  transition-property: background-color, border-color, color, box-shadow, fill, stroke;
+  transition-duration: 0.14s;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme] [class*="animate-"],
+html[data-theme] [class*="motion-"],
+html[data-theme] .no-theme-transition,
+html[data-theme] .no-theme-transition * {
+  transition-property: none !important;
+}

@@ -1,0 +1,137 @@
+'use client';
+
+import { useEffect, type ReactNode } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
+import { motion, AnimatePresence } from 'motion/react';
+import { Home, Map, BookOpen, Briefcase, User } from 'lucide-react';
+import { useGame } from './GameContext';
+import { Sidebar } from './Sidebar';
+
+const navItems = [
+  { path: '/app/dashboard', icon: Home, label: 'Home' },
+  { path: '/app/roadmap', icon: Map, label: 'Roadmap' },
+  { path: '/app/courses', icon: BookOpen, label: 'Courses' },
+  { path: '/app/jobs', icon: Briefcase, label: 'Jobs' },
+  { path: '/app/profile', icon: User, label: 'Profile' },
+];
+
+export function Layout({ children }: { children: ReactNode }) {
+  const router = useRouter();
+  const pathname = usePathname() ?? '';
+  const { showXpBurst, lastXpGain, isAuthenticated, isOnboarded, isHydrating, user } = useGame();
+  const isMentor = pathname === '/app/mentor';
+
+  useEffect(() => {
+    if (isHydrating) return;
+    if (!isAuthenticated) {
+      router.replace('/');
+      return;
+    }
+    // Only redirect to onboarding once ME has actually loaded (email populated).
+    // This prevents a transient ME failure from bouncing an authenticated user
+    // back through onboarding — the localStorage fallback in GameContext handles
+    // the isOnboarded value when ME fails, but if that also fails we want to
+    // stay put rather than disrupt the user.
+    if (!isOnboarded && user.email) {
+      router.replace('/onboarding');
+    }
+  }, [isHydrating, isAuthenticated, isOnboarded, user.email, router]);
+
+  return (
+    <div className="aurora-bg min-h-screen flex" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+
+      {/* Desktop sidebar — hidden below lg */}
+      <Sidebar />
+
+      {/* Main area — shifts right on desktop to make room for sidebar */}
+      <div className="sidebar-main-content flex-1 flex flex-col items-center" style={{ width: '100%' }}>
+        <div className="app-shell w-full" id="main-content">
+          <AnimatePresence>
+            {showXpBurst && (
+              <motion.div
+                initial={{ opacity: 0, y: 20, scale: 0.8 }}
+                animate={{ opacity: 1, y: -10, scale: 1 }}
+                exit={{ opacity: 0, y: -40, scale: 0.8 }}
+                className="fixed top-20 left-1/2 z-[100] pointer-events-none"
+                style={{ transform: 'translateX(-50%)' }}
+              >
+                <div className="glass-card-purple rounded-2xl px-5 py-3 flex items-center gap-2 glow-purple">
+                  <span className="text-xl">⚡</span>
+                  <span className="text-gradient" style={{ fontWeight: 700, fontSize: '1.1rem' }}>
+                    +{lastXpGain} XP
+                  </span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Mobile-only AI Mentor FAB (sidebar handles this on desktop) */}
+          {!isMentor && (
+            <motion.button
+              type="button"
+              initial={{ scale: 0 }}
+              animate={{ scale: 1 }}
+              transition={{ delay: 1, type: 'spring' }}
+              onClick={() => router.push('/app/mentor')}
+              className="fixed z-40 glow-purple nav-bottom-mobile"
+              aria-label="Open AI career mentor"
+              style={{
+                bottom: '90px',
+                right: 'clamp(1rem, 3vw, 2rem)',
+                width: '48px',
+                height: '48px',
+                borderRadius: 'var(--cp-radius-md)',
+                background: 'var(--cp-accent)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                boxShadow: 'var(--cp-elevation-3)',
+                cursor: 'pointer',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.3rem',
+              }}
+            >
+              🤖
+            </motion.button>
+          )}
+
+          <div className="app-content">{children}</div>
+
+          {/* Bottom nav — mobile/tablet only */}
+          <nav className="nav-bottom nav-bottom-mobile fixed bottom-0 left-0 w-full z-50" aria-label="Primary">
+            <div className="app-page flex items-center justify-around px-2 py-2">
+              {navItems.map(({ path, icon: Icon, label }) => {
+                const isActive = pathname === path || pathname.startsWith(`${path}/`);
+                return (
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() => router.push(path)}
+                    aria-current={isActive ? 'page' : undefined}
+                    className="flex flex-col items-center gap-1 px-3 py-2 rounded-2xl transition-all duration-200 relative"
+                    style={{
+                      background: isActive ? 'var(--cp-accent-bg)' : 'transparent',
+                      color: isActive ? 'var(--cp-accent-light)' : 'var(--cp-text-muted)',
+                    }}
+                  >
+                    {isActive && (
+                      <motion.div
+                        layoutId="nav-indicator"
+                        className="absolute inset-0 rounded-2xl"
+                        style={{ background: 'var(--cp-accent-bg)', border: '1px solid var(--cp-border-accent)' }}
+                      />
+                    )}
+                    <Icon size={22} strokeWidth={isActive ? 2.5 : 1.8} />
+                    <span style={{ fontSize: '10px', fontWeight: isActive ? 600 : 400 }}>{label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+        </div>
+      </div>
+    </div>
+  );
+}

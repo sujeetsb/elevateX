@@ -1,0 +1,520 @@
+// CareerPilot — production schema (Neon PostgreSQL)
+// https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth (NextAuth) ─────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Core user ────────────────────────────────────────────────────
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  role          UserRole  @default(USER)
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts            Account[]
+  sessions            Session[]
+  profile             Profile?
+  skills              UserSkill[]
+  resumes             Resume[]
+  certifications      UserCertification[]
+  jobPreferences      JobPreference?
+  learningPreferences LearningPreference?
+  savedJobs           SavedJob[]
+  applications        JobApplication[]
+  roadmaps            LearningRoadmap[]
+  learningProgress    LearningProgress[]
+  aiConversations     AiConversation[]
+  aiRecommendations   AiRecommendation[]
+  activityLogs        ActivityLog[]
+  notifications       Notification[]
+  analytics           UserAnalytics?
+  cachedAiResponses   CachedAiResponse[]
+}
+
+model Profile {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  headline             String?
+  bio                  String?   @db.Text
+  currentRole          String?
+  experienceYears      String?
+  education            String?   @db.Text
+  careerGoal           String?   @db.Text
+  targetRole           String?
+  preferredIndustry    String?
+  preferredIndustries  String[]  @default([])
+  themePreference      String?   @default("system")
+  salaryExpectation    String?
+  currentSalary        String?
+  salaryCurrency       String?  @default("USD")
+  salaryFrequency      String?  @default("Annual")
+  compensationType     String?
+  country              String?
+  locationPreference   String?
+  linkedInUrl          String?
+  githubUrl            String?
+  portfolioUrl         String?
+  onboardingComplete   Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([targetRole])
+}
+
+model UserCertification {
+  id            String    @id @default(cuid())
+  userId        String
+  name          String
+  issuer        String
+  issueDate     String?
+  expiryDate    String?
+  credentialId  String?
+  credentialUrl String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Skill {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  label     String
+  category  String?
+  createdAt DateTime @default(now())
+
+  users UserSkill[]
+}
+
+enum SkillProficiency {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  EXPERT
+}
+
+model UserSkill {
+  id           String           @id @default(cuid())
+  userId       String
+  skillId      String
+  proficiency  SkillProficiency @default(INTERMEDIATE)
+  yearsMonths  Int?
+  source       String?
+  verified     Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, skillId])
+  @@index([skillId])
+}
+
+enum ResumeParseStatus {
+  PENDING
+  PROCESSING
+  COMPLETE
+  FAILED
+}
+
+model Resume {
+  id            String             @id @default(cuid())
+  userId        String
+  title         String             @default("Primary CV")
+  fileUrl       String?
+  filePublicId  String?
+  mimeType      String?
+  rawText       String?            @db.Text
+  /// SHA-256 of rawText for duplicate detection (per user).
+  contentHash   String?
+  parseVersion  Int                @default(1)
+  parsedJson    Json?
+  confidence    Json?
+  atsScore      Int?
+  parseStatus   ResumeParseStatus  @default(PENDING)
+  parseError    String?            @db.Text
+  lastParsedAt  DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  deletedAt     DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, deletedAt])
+  @@index([parseStatus])
+  @@index([userId, contentHash])
+}
+
+model JobPreference {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  remoteOnly      Boolean  @default(false)
+  locations       String[] @default([])
+  salaryMin       Int?
+  salaryMax       Int?
+  employmentTypes String[] @default([])
+  companySize     String?
+  keywords        String[] @default([])
+  excludeKeywords String[] @default([])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model LearningPreference {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  pace             String?
+  weeklyHours      Int?
+  preferredFormats String[] @default([])
+  topics           String[] @default([])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Jobs (normalized + user data) ───────────────────────────────
+
+enum JobSource {
+  ADZUNA
+  REMOTIVE
+  GREENHOUSE
+  LEVER
+  USAJOBS
+  JSEARCH
+  ARBEITNOW
+  MOCK
+  MANUAL
+}
+
+model Job {
+  id          String    @id @default(cuid())
+  source      JobSource
+  externalId  String
+  title       String
+  company     String
+  location    String?
+  description String?   @db.Text
+  url         String
+  salaryMin   Int?
+  salaryMax   Int?
+  currency    String?   @default("USD")
+  postedAt    DateTime?
+  metadata    Json?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  savedBy      SavedJob[]
+  applications JobApplication[]
+
+  @@unique([source, externalId])
+  @@index([company])
+  @@index([title])
+  @@index([deletedAt])
+}
+
+model SavedJob {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String
+  note      String?  @db.Text
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([jobId])
+}
+
+enum ApplicationStatus {
+  DRAFT
+  APPLIED
+  INTERVIEW
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+model JobApplication {
+  id          String              @id @default(cuid())
+  userId      String
+  jobId       String
+  status      ApplicationStatus   @default(DRAFT)
+  appliedAt   DateTime?
+  notes       String?             @db.Text
+  matchScore  Int?
+  aiSummary   String?             @db.Text
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  deletedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([jobId])
+}
+
+// ─── Learning ───────────────────────────────────────────────────
+
+enum RoadmapStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model LearningRoadmap {
+  id          String         @id @default(cuid())
+  userId      String
+  title       String
+  summary     String?        @db.Text
+  jsonPlan    Json?
+  status      RoadmapStatus  @default(ACTIVE)
+  targetRole  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  progress LearningProgress[]
+
+  @@index([userId, status])
+}
+
+model LearningProgress {
+  id          String    @id @default(cuid())
+  userId      String
+  roadmapId   String?
+  resourceId  String
+  resourceUrl String
+  title       String
+  provider    String
+  completed   Boolean   @default(false)
+  progressPct Int       @default(0)
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  roadmap LearningRoadmap? @relation(fields: [roadmapId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([roadmapId])
+}
+
+// ─── AI ─────────────────────────────────────────────────────────
+
+enum AiConversationType {
+  MENTOR
+  RESUME
+  INTERVIEW
+  CAREER
+  GENERAL
+}
+
+model AiConversation {
+  id        String               @id @default(cuid())
+  userId    String
+  type      AiConversationType   @default(GENERAL)
+  title     String?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AiMessage[]
+
+  @@index([userId, type])
+}
+
+model AiMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String   @db.Text
+  promptVersion  String?
+  tokenEstimate  Int?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+enum RecommendationKind {
+  JOB
+  LEARNING
+  RESUME_ACTION
+  SKILL_GAP
+  CAREER_STEP
+}
+
+model AiRecommendation {
+  id          String               @id @default(cuid())
+  userId      String
+  kind        RecommendationKind
+  score       Int?
+  payload     Json
+  rationale   String?              @db.Text
+  promptKey   String?
+  promptVer   String?
+  dismissed   Boolean              @default(false)
+  createdAt   DateTime             @default(now())
+  expiresAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind, dismissed])
+  @@index([expiresAt])
+}
+
+model CachedAiResponse {
+  id          String   @id @default(cuid())
+  userId      String?
+  cacheKey    String   @unique
+  promptKey   String
+  promptVer   String
+  model       String
+  response    Json
+  tokenIn     Int?
+  tokenOut    Int?
+  hitCount    Int      @default(0)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─── Activity & notifications ────────────────────────────────────
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+}
+
+model Notification {
+  id        String                @id @default(cuid())
+  userId    String
+  channel   NotificationChannel   @default(IN_APP)
+  title     String
+  body      String                @db.Text
+  read      Boolean               @default(false)
+  metadata  Json?
+  createdAt DateTime              @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+enum ActivityVerb {
+  SIGN_IN
+  PROFILE_UPDATE
+  RESUME_UPLOAD
+  RESUME_PARSE
+  JOB_SAVE
+  JOB_APPLY
+  ROADMAP_GENERATED
+  AI_CHAT
+  CACHE_INVALIDATE
+}
+
+model ActivityLog {
+  id        String       @id @default(cuid())
+  userId    String?
+  verb      ActivityVerb
+  subject   String?
+  metadata  Json?
+  ipHash    String?
+  createdAt DateTime     @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([verb, createdAt])
+}
+
+model UserAnalytics {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  lastActiveAt     DateTime @default(now())
+  jobViews         Int      @default(0)
+  jobClicks        Int      @default(0)
+  learningMinutes  Int      @default(0)
+  aiTokensMonth    Int      @default(0)
+  snapshot         Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
