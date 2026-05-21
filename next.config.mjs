@@ -6,6 +6,7 @@ const nextConfig = {
     // pdf-parse pulls pdfjs-dist; bundling them breaks App Router with
     // "Object.defineProperty called on non-object" — load from node_modules at runtime.
     serverComponentsExternalPackages: [
+      '@napi-rs/canvas',
       '@prisma/client',
       'bcryptjs',
       'pdf-parse',
