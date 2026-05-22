@@ -3,7 +3,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { Upload, ChevronRight, ChevronLeft, Check, Zap, Plus, X, FileText, Loader2 } from 'lucide-react';
+import { Upload, ChevronRight, ChevronLeft, Check, Plus, X, FileText, Loader2, AlertTriangle, RotateCcw } from 'lucide-react';
+import { toast } from 'sonner';
 import { useGame } from '../components/GameContext';
 import { CareerDialog } from '../components/CareerDialog';
 import { DialogTitle } from '../components/ui/dialog';
@@ -13,7 +14,29 @@ import { mapResumeParsedJsonToOnboardingPrefill } from '@/lib/onboarding/map-res
 import { STORAGE_KEYS, APP_NAME } from '@/lib/brand';
 import { BrandLogo } from '@/components/BrandLogo';
 
+const PARSE_STATUS_LABELS: Record<string, string> = {
+  PENDING: 'Queued for analysis…',
+  PROCESSING: 'Analyzing resume with AI…',
+  EXTRACTING: 'Extracting skills & experience…',
+  SCORING: 'Generating ATS score…',
+  COMPLETE: 'Analysis complete ✓',
+  FAILED: 'Analysis failed',
+};
+
+/** Read a user-facing message from API error JSON. */
+function readApiError(json: unknown, fallback: string): string {
+  if (!json || typeof json !== 'object') return fallback;
+  const j = json as Record<string, unknown>;
+  if (typeof j.message === 'string') return j.message;
+  const err = j.error;
+  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
+    return (err as { message: string }).message;
+  }
+  return fallback;
+}
+
 const steps = ['Start', 'Basics', 'Career', 'Goals', 'Done'];
+const PASTE_MIN_CHARS = 20;
 
 const PREFERRED_INDUSTRIES = [
   'Technology',
@@ -90,6 +113,8 @@ export function Onboarding() {
   const [showPasteDialog, setShowPasteDialog] = useState(false);
   const [pasteText, setPasteText] = useState('');
   const [pasteBusy, setPasteBusy] = useState(false);
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const [uploadRetryCount, setUploadRetryCount] = useState(0);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -236,16 +261,33 @@ export function Onboarding() {
     addXP(100);
   };
 
-  const apiErrorMessage = useCallback((json: unknown, fallback: string) => {
-    if (!json || typeof json !== 'object') return fallback;
-    const j = json as Record<string, unknown>;
-    if (typeof j.message === 'string') return j.message;
-    const err = j.error;
-    if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-      return (err as { message: string }).message;
+  const pollResumeStatus = useCallback(async (resumeId: string) => {
+    setResumeParseStatus('PROCESSING');
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 90_000) {
+      try {
+        const sRes = await fetch(`/api/v1/resumes/${resumeId}`, { credentials: 'include' });
+        const sJson = await sRes.json().catch(() => ({}));
+        const status = sJson?.data?.parseStatus as string | undefined;
+        if (status) setResumeParseStatus(status);
+        if (status === 'COMPLETE') {
+          const conf = sJson?.data?.confidence as Record<string, unknown> | undefined;
+          const overall = typeof conf?.overall === 'number' ? conf.overall : null;
+          if (overall != null) setResumeConfidence(overall);
+          applyPrefillFromParsedJson(sJson?.data?.parsedJson);
+          await refresh();
+          return;
+        }
+        if (status === 'FAILED') {
+          setResumeError((sJson?.data?.parseError as string | undefined) ?? 'Resume parsing failed.');
+          return;
+        }
+      } catch {
+        // keep polling until timeout
+      }
+      await new Promise(r => setTimeout(r, 2000));
     }
-    return fallback;
-  }, []);
+  }, [applyPrefillFromParsedJson, refresh]);
 
   const runResumePipelineFromUt = async (
     files: { ufsUrl: string; key: string; name: string; type: string }[],
@@ -255,6 +297,8 @@ export function Onboarding() {
     setResumeError(null);
     setResumeParsing(true);
     setResumeConfidence(null);
+    setResumeParseStatus(null);
+
     try {
       const parseRes = await fetch('/api/v1/onboarding/resume/parse', {
         method: 'POST',
@@ -268,10 +312,9 @@ export function Onboarding() {
       });
       const parseJson = await parseRes.json().catch(() => ({}));
       if (!parseRes.ok) {
-        throw new Error(apiErrorMessage(parseJson, 'Could not parse that file.'));
+        throw new Error(readApiError(parseJson, 'Could not parse that file.'));
       }
-
-      mergeParsed(parseJson.data);
+      mergeParsed(parseJson.data as ResumeParseResult);
 
       const uploadRes = await fetch('/api/v1/resumes', {
         method: 'POST',
@@ -286,122 +329,78 @@ export function Onboarding() {
       });
       const uploadJson = await uploadRes.json().catch(() => ({}));
       if (!uploadRes.ok) {
-        throw new Error(apiErrorMessage(uploadJson, 'Could not save resume.'));
+        throw new Error(readApiError(uploadJson, 'Could not save resume.'));
       }
 
-      const resumeId = uploadJson?.data?.resumeId as string | undefined;
       setResumeUploaded(true);
       setStep(1);
       grantResumeXpOnce();
 
-      if (resumeId) {
-        setResumeParseStatus('PROCESSING');
-        void (async () => {
-          const startedAt = Date.now();
-          while (Date.now() - startedAt < 60_000) {
-            try {
-              const sRes = await fetch(`/api/v1/resumes/${resumeId}`, { credentials: 'include' });
-              const sJson = await sRes.json().catch(() => ({}));
-              const status = sJson?.data?.parseStatus as string | undefined;
-              if (status) setResumeParseStatus(status);
-              if (status === 'COMPLETE') {
-                const parsed = sJson?.data?.parsedJson;
-                const conf = sJson?.data?.confidence as Record<string, unknown> | undefined;
-                const overall = typeof conf?.overall === 'number' ? conf.overall : null;
-                if (overall != null) setResumeConfidence(overall);
-
-                applyPrefillFromParsedJson(parsed);
-                await refresh();
-                return;
-              }
-              if (status === 'FAILED') {
-                setResumeError(sJson?.data?.parseError || 'Resume parsing failed.');
-                return;
-              }
-            } catch (pollErr) {
-              // keep polling until timeout
-              if (pollErr instanceof Error) setResumeError(pollErr.message);
-            }
-            await new Promise(r => setTimeout(r, 2000));
-          }
-        })();
-      }
+      const resumeId = uploadJson?.data?.resumeId as string | undefined;
+      if (resumeId) void pollResumeStatus(resumeId);
     } catch (err) {
-      setResumeError(err instanceof Error ? err.message : 'Could not read that file. Try PDF, DOCX, or TXT.');
+      const msg = err instanceof Error ? err.message : 'Could not read that file. Try PDF, DOCX, or TXT.';
+      setResumeError(msg);
+      toast.error('Resume upload failed.', { description: msg });
+      setUploadRetryCount(prev => prev + 1);
     } finally {
       setResumeParsing(false);
     }
   };
 
   const handlePasteSubmit = async () => {
-    if (!pasteText.trim()) return;
+    const trimmed = pasteText.trim();
+    setPasteError(null);
+
+    if (!trimmed) {
+      setPasteError('Please paste your resume text first.');
+      return;
+    }
+    if (trimmed.length < PASTE_MIN_CHARS) {
+      setPasteError(`Please paste at least ${PASTE_MIN_CHARS} characters of resume text.`);
+      return;
+    }
+
     setPasteBusy(true);
     setResumeError(null);
     setResumeConfidence(null);
+
     try {
       const parseRes = await fetch('/api/v1/onboarding/resume/parse-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: pasteText }),
+        body: JSON.stringify({ text: trimmed }),
         credentials: 'include',
       });
       const parseJson = await parseRes.json().catch(() => ({}));
       if (!parseRes.ok) {
-        throw new Error(apiErrorMessage(parseJson, 'Could not parse pasted text.'));
+        throw new Error(readApiError(parseJson, 'Could not parse pasted text.'));
       }
-      mergeParsed(parseJson.data);
+      mergeParsed(parseJson.data as ResumeParseResult);
 
       const uploadRes = await fetch('/api/v1/resumes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rawText: pasteText }),
+        body: JSON.stringify({ rawText: trimmed }),
         credentials: 'include',
       });
       const uploadJson = await uploadRes.json().catch(() => ({}));
       if (!uploadRes.ok) {
-        throw new Error(apiErrorMessage(uploadJson, 'Could not upload resume.'));
+        throw new Error(readApiError(uploadJson, 'Could not save resume.'));
       }
 
-      const resumeId = uploadJson?.data?.resumeId as string | undefined;
       setResumeUploaded(true);
       grantResumeXpOnce();
       setShowPasteDialog(false);
       setPasteText('');
       setStep(1);
 
-      if (resumeId) {
-        setResumeParseStatus('PROCESSING');
-        void (async () => {
-          const startedAt = Date.now();
-          while (Date.now() - startedAt < 60_000) {
-            try {
-              const sRes = await fetch(`/api/v1/resumes/${resumeId}`, { credentials: 'include' });
-              const sJson = await sRes.json().catch(() => ({}));
-              const status = sJson?.data?.parseStatus as string | undefined;
-              if (status) setResumeParseStatus(status);
-              if (status === 'COMPLETE') {
-                const parsed = sJson?.data?.parsedJson;
-                const conf = sJson?.data?.confidence as Record<string, unknown> | undefined;
-                const overall = typeof conf?.overall === 'number' ? conf.overall : null;
-                if (overall != null) setResumeConfidence(overall);
-
-                applyPrefillFromParsedJson(parsed);
-                await refresh();
-                return;
-              }
-              if (status === 'FAILED') {
-                setResumeError(sJson?.data?.parseError || 'Resume parsing failed.');
-                return;
-              }
-            } catch (pollErr) {
-              if (pollErr instanceof Error) setResumeError(pollErr.message);
-            }
-            await new Promise(r => setTimeout(r, 2000));
-          }
-        })();
-      }
+      const resumeId = uploadJson?.data?.resumeId as string | undefined;
+      if (resumeId) void pollResumeStatus(resumeId);
     } catch (err) {
-      setResumeError(err instanceof Error ? err.message : 'Could not parse pasted text.');
+      const msg = err instanceof Error ? err.message : 'Could not parse pasted text.';
+      setPasteError(msg);
+      toast.error('Failed to import resume text.', { description: msg });
     } finally {
       setPasteBusy(false);
     }
@@ -512,7 +511,7 @@ export function Onboarding() {
 
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
-        throw new Error(apiErrorMessage(json, 'Profile update failed'));
+        throw new Error(readApiError(json, 'Profile update failed'));
       }
 
       await refresh();
@@ -529,7 +528,9 @@ export function Onboarding() {
         router.push('/app/dashboard');
       }, 1600);
     } catch (err) {
-      setResumeError(err instanceof Error ? err.message : 'Profile update failed');
+      const msg = err instanceof Error ? err.message : 'Profile update failed. Please try again.';
+      setResumeError(msg);
+      toast.error('Profile update failed.', { description: msg });
     } finally {
       setSubmittingProfile(false);
     }
@@ -594,44 +595,63 @@ export function Onboarding() {
 
   return (
     <div className="aurora-bg min-h-screen flex flex-col p-4 sm:p-6 lg:p-8" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-      <CareerDialog open={showPasteDialog} onOpenChange={setShowPasteDialog}>
+      <CareerDialog open={showPasteDialog} onOpenChange={open => {
+        setShowPasteDialog(open);
+        if (!open) { setPasteText(''); setPasteError(null); }
+      }}>
         <DialogTitle className="sr-only">Paste resume text</DialogTitle>
         <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.85rem', marginBottom: '12px' }}>
-          Paste plain text from your resume. We will extract basics locally (mock) or via your API when configured.
+          Paste your resume as plain text. AI will extract your name, skills, and experience.
         </p>
-        <textarea
-          value={pasteText}
-          onChange={e => setPasteText(e.target.value)}
-          rows={8}
-          className="mb-4 w-full resize-none rounded-xl px-4 py-3 outline-none"
-          style={{
-            background: 'var(--cp-bg-elevated)',
-            border: '1px solid var(--cp-border)',
-            color: 'var(--cp-text-primary)',
-            fontSize: '0.9rem',
-          }}
-          placeholder="Paste resume text here…"
-        />
+        <div className="relative mb-1">
+          <textarea
+            value={pasteText}
+            onChange={e => { setPasteText(e.target.value); if (pasteError) setPasteError(null); }}
+            rows={8}
+            className="w-full resize-none rounded-xl px-4 py-3 outline-none"
+            style={{
+              background: 'var(--cp-bg-elevated)',
+              border: pasteError ? '1px solid rgba(244,63,94,0.5)' : '1px solid var(--cp-border)',
+              color: 'var(--cp-text-primary)',
+              fontSize: '0.9rem',
+            }}
+            placeholder="Paste resume text here… (minimum 20 characters)"
+            disabled={pasteBusy}
+          />
+        </div>
+        <div className="flex items-center justify-between mb-3" style={{ fontSize: '0.75rem' }}>
+          <span style={{ color: pasteText.trim().length < PASTE_MIN_CHARS && pasteText.length > 0 ? '#f87171' : 'var(--cp-text-faint)' }}>
+            {pasteText.trim().length} / {PASTE_MIN_CHARS} characters minimum
+          </span>
+          {pasteText.trim().length >= PASTE_MIN_CHARS && (
+            <span style={{ color: '#10b981' }}>✓ Ready to import</span>
+          )}
+        </div>
+        {pasteError && (
+          <div className="flex items-start gap-2 mb-3 rounded-xl px-3 py-2"
+            style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }}>
+            <AlertTriangle size={14} color="#f87171" className="mt-0.5 shrink-0" />
+            <p style={{ color: '#fda4af', fontSize: '0.82rem' }}>{pasteError}</p>
+          </div>
+        )}
         <div className="flex gap-2">
           <button
             type="button"
             className="flex-1 rounded-xl py-3"
             style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-muted)' }}
-            onClick={() => {
-              setShowPasteDialog(false);
-              setPasteText('');
-            }}
+            onClick={() => { setShowPasteDialog(false); setPasteText(''); setPasteError(null); }}
+            disabled={pasteBusy}
           >
             Cancel
           </button>
           <button
             type="button"
             className="btn-primary flex-1 flex items-center justify-center gap-2 rounded-xl py-3"
-            disabled={!pasteText.trim() || pasteBusy}
+            disabled={pasteBusy || pasteText.trim().length < PASTE_MIN_CHARS}
             onClick={() => void handlePasteSubmit()}
           >
             {pasteBusy ? <Loader2 className="animate-spin" size={18} /> : null}
-            Import
+            {pasteBusy ? 'Importing…' : 'Import Resume'}
           </button>
         </div>
       </CareerDialog>
@@ -727,14 +747,17 @@ export function Onboarding() {
                       <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.82rem' }}>
                         PDF, DOCX, or TXT via UploadThing — parsed with Gemini in the background.
                       </div>
-                      {resumeParseStatus ? (
-                        <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '6px' }}>
-                          Parsing status: {resumeParseStatus}
+                      {resumeParseStatus && resumeParseStatus !== 'COMPLETE' ? (
+                        <div className="flex items-center gap-1.5 mt-1.5">
+                          {resumeParseStatus !== 'FAILED' && <Loader2 size={12} className="animate-spin text-violet-400" />}
+                          <span style={{ color: resumeParseStatus === 'FAILED' ? '#f87171' : 'var(--cp-text-muted)', fontSize: '0.78rem' }}>
+                            {PARSE_STATUS_LABELS[resumeParseStatus] ?? resumeParseStatus}
+                          </span>
                         </div>
                       ) : null}
                       {resumeConfidence != null ? (
-                        <div style={{ color: '#10b981', fontSize: '0.78rem', fontWeight: 700 }}>
-                          Confidence: {Math.round(resumeConfidence * 100)}%
+                        <div style={{ color: '#10b981', fontSize: '0.78rem', fontWeight: 700, marginTop: '4px' }}>
+                          AI confidence: {Math.round(resumeConfidence * 100)}%
                         </div>
                       ) : null}
                       {!resumeUploaded && (
@@ -784,23 +807,49 @@ export function Onboarding() {
                 </button>
 
                 {resumeError && (
-                  <p style={{ color: '#f87171', fontSize: '0.82rem', marginBottom: '12px' }} role="alert">{resumeError}</p>
+                  <div className="mb-4 rounded-xl px-3 py-3"
+                    style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)' }}
+                    role="alert"
+                  >
+                    <div className="flex items-start gap-2 mb-2">
+                      <AlertTriangle size={14} color="#f87171" className="mt-0.5 shrink-0" />
+                      <p style={{ color: '#fda4af', fontSize: '0.82rem' }}>{resumeError}</p>
+                    </div>
+                    {uploadRetryCount < 2 && !resumeUploaded && (
+                      <button
+                        type="button"
+                        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs"
+                        style={{ background: 'rgba(244,63,94,0.15)', border: '1px solid rgba(244,63,94,0.3)', color: '#fda4af' }}
+                        onClick={() => { setResumeError(null); setResumeParseStatus(null); }}
+                      >
+                        <RotateCcw size={11} /> Try again
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 <button
                   type="button"
                   onClick={() => setStep(1)}
-                  className="glass-card w-full rounded-3xl p-5 text-left"
-                  style={{ border: '1px solid var(--cp-border)' }}
+                  className="glass-card w-full rounded-3xl p-5 text-left transition-all"
+                  style={{
+                    border: resumeError ? '1px solid rgba(124,58,237,0.45)' : '1px solid var(--cp-border)',
+                    background: resumeError ? 'rgba(124,58,237,0.08)' : undefined,
+                  }}
                 >
                   <div className="flex items-start gap-4">
                     <div className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0"
-                      style={{ background: 'var(--cp-bg-card)' }}>
+                      style={{ background: resumeError ? 'rgba(124,58,237,0.2)' : 'var(--cp-bg-card)' }}>
                       <span style={{ fontSize: '1.4rem' }}>📝</span>
                     </div>
                     <div>
-                      <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, marginBottom: '4px' }}>Manual profile builder</div>
-                      <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.82rem' }}>Fill in your details step by step</div>
+                      <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, marginBottom: '4px' }}>
+                        Manual profile builder
+                        {resumeError && <span style={{ color: '#a78bfa', fontSize: '0.75rem', marginLeft: '8px' }}>← Recommended</span>}
+                      </div>
+                      <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.82rem' }}>
+                        {resumeError ? "Fill in your details step by step — no file needed." : "Fill in your details step by step"}
+                      </div>
                     </div>
                   </div>
                 </button>

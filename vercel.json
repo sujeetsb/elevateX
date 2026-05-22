@@ -9,14 +9,14 @@
     },
     "src/app/api/v1/onboarding/resume/parse/route.ts": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+      "includeFiles": "node_modules/pdf-parse/dist/worker/**"
     },
     "src/app/api/v1/onboarding/resume/parse-text/route.ts": {
-      "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+      "maxDuration": 60
     },
     "src/app/api/v1/resumes/route.ts": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs"
+      "includeFiles": "node_modules/pdf-parse/dist/worker/**"
     }
   }
 }
