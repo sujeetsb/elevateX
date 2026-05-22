@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "SKIP_ENV_VALIDATION=1 dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- prisma generate && next build",
+    "build": "SKIP_ENV_VALIDATION=1 dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- prisma generate && next build && node scripts/copy-pdf-worker.mjs",
     "start": "next start",
     "lint": "next lint",
     "e2e": "playwright test",
