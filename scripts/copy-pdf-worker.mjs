@@ -10,6 +10,7 @@ import { copyFileSync, mkdirSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { getPath } from 'pdf-parse/worker';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -22,21 +23,31 @@ if (!existsSync(standaloneRoot)) {
 
 const req = createRequire(import.meta.url);
 
-/** Copy a resolved npm file into the standalone node_modules tree. */
+/** Copy a file into the standalone node_modules tree, preserving its path under node_modules/. */
 function copyIntoStandalone(resolvedSrc) {
-  const rel = resolvedSrc.split(`${root}/node_modules/`)[1];
-  if (!rel) {
+  const marker = `${root}/node_modules/`;
+  const idx = resolvedSrc.indexOf(marker);
+  if (idx === -1) {
     console.warn('[copy-pdf-worker] could not derive relative path for', resolvedSrc);
     return;
   }
+  const rel = resolvedSrc.slice(idx + marker.length);
   const dest = resolve(standaloneRoot, 'node_modules', rel);
+  if (!existsSync(resolvedSrc)) {
+    console.warn('[copy-pdf-worker] source missing, skipping:', resolvedSrc);
+    return;
+  }
   mkdirSync(dirname(dest), { recursive: true });
   copyFileSync(resolvedSrc, dest);
   console.log('[copy-pdf-worker] copied →', dest.replace(root + '/', ''));
 }
 
-// Primary worker used by pdf-parse/worker getPath()
-copyIntoStandalone(req.resolve('pdf-parse/dist/worker/pdf.worker.mjs'));
+// Primary worker — use the exported pdf-parse/worker API (internal path is not in package exports).
+copyIntoStandalone(getPath());
 
-// Fallback worker bundled with pdfjs-dist (some code paths still reference it)
-copyIntoStandalone(req.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'));
+// Fallback worker bundled with pdfjs-dist.
+try {
+  copyIntoStandalone(req.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'));
+} catch (err) {
+  console.warn('[copy-pdf-worker] pdfjs-dist worker not resolved:', err instanceof Error ? err.message : err);
+}
