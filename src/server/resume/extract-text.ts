@@ -2,6 +2,25 @@ import mammoth from 'mammoth';
 
 export type ExtractResult = { text: string; mime: string };
 
+let pdfCanvasPolyfillsReady: Promise<void> | null = null;
+
+async function ensurePdfCanvasPolyfills() {
+  pdfCanvasPolyfillsReady ??= import('@napi-rs/canvas')
+    .then(({ DOMMatrix, ImageData, Path2D }) => {
+      const g = globalThis as Record<string, unknown>;
+
+      g.DOMMatrix ??= DOMMatrix;
+      g.ImageData ??= ImageData;
+      g.Path2D ??= Path2D;
+    })
+    .catch(error => {
+      pdfCanvasPolyfillsReady = null;
+      throw error;
+    });
+
+  await pdfCanvasPolyfillsReady;
+}
+
 function inferMime(nameOrMime: string): { mime: string; ext: string } {
   const s = nameOrMime.toLowerCase();
   if (s.includes('pdf') || s.endsWith('.pdf')) return { mime: 'application/pdf', ext: 'pdf' };
@@ -19,7 +38,9 @@ export async function extractResumeText(buffer: Buffer, fileNameOrMime: string):
   const { mime, ext } = inferMime(fileNameOrMime);
 
   if (mime === 'application/pdf' || ext === 'pdf') {
-    // Dynamic import so non-PDF paths never load pdfjs; keep pdf-parse external in next.config.mjs.
+    // pdfjs-dist expects browser canvas primitives on globalThis in Node/serverless.
+    await ensurePdfCanvasPolyfills();
+    // Dynamic import after polyfill so pdfjs sees DOMMatrix/ImageData/Path2D while loading.
     const { PDFParse } = await import('pdf-parse');
     const parser = new PDFParse({ data: buffer });
     try {
