@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, Lock, Check, Play, BookOpen, HelpCircle, Hammer, Zap, ChevronDown, ChevronUp, Trophy, Loader2 } from 'lucide-react';
@@ -111,7 +111,7 @@ export function CourseDetail() {
   const contextHasModules = Boolean(courseFromContext?.modules?.length);
   const course = (contextHasModules ? courseFromContext : null) ?? localCourse ?? courseFromContext ?? null;
 
-  const loadCourse = async (courseId: string) => {
+  const loadCourse = useCallback(async (courseId: string) => {
     setLoadingCourse(true);
     setLoadError(null);
     try {
@@ -130,13 +130,28 @@ export function CourseDetail() {
     } finally {
       setLoadingCourse(false);
     }
-  };
+  }, [addCourse]);
 
   useEffect(() => {
     if (!id) return;
     if (contextHasModules) return;
     void loadCourse(id);
-  }, [id, contextHasModules]);
+  }, [id, contextHasModules, loadCourse]);
+
+  const activeQuizLesson = useMemo(
+    () =>
+      quizLessonTarget && course
+        ? course.modules
+          .find(m => m.id === quizLessonTarget.moduleId)
+          ?.lessons.find(l => l.id === quizLessonTarget.lessonId)
+        : null,
+    [course, quizLessonTarget],
+  );
+  const activeQuizQuestions = useMemo(() => {
+    const fromDynamic = quizLessonTarget?.lessonId ? dynamicQuizByLesson[quizLessonTarget.lessonId] : undefined;
+    if (Array.isArray(fromDynamic) && fromDynamic.length > 0) return fromDynamic;
+    return Array.isArray(activeQuizLesson?.quiz) ? activeQuizLesson.quiz : [];
+  }, [activeQuizLesson?.quiz, dynamicQuizByLesson, quizLessonTarget?.lessonId]);
 
   useEffect(() => {
     if (!course) return;
@@ -227,20 +242,6 @@ export function CourseDetail() {
     course.modules
       .find(m => m.id === activeLesson.moduleId)
       ?.lessons.find(l => l.id === activeLesson.lessonId);
-  const activeQuizLesson = useMemo(
-    () =>
-      quizLessonTarget
-        ? course.modules
-          .find(m => m.id === quizLessonTarget.moduleId)
-          ?.lessons.find(l => l.id === quizLessonTarget.lessonId)
-        : null,
-    [course.modules, quizLessonTarget],
-  );
-  const activeQuizQuestions = useMemo(() => {
-    const fromDynamic = quizLessonTarget?.lessonId ? dynamicQuizByLesson[quizLessonTarget.lessonId] : undefined;
-    if (Array.isArray(fromDynamic) && fromDynamic.length > 0) return fromDynamic;
-    return Array.isArray(activeQuizLesson?.quiz) ? activeQuizLesson.quiz : [];
-  }, [activeQuizLesson?.quiz, dynamicQuizByLesson, quizLessonTarget?.lessonId]);
   const activeQuizQuestion = activeQuizQuestions[0] ?? null;
   const quizOptions = activeQuizQuestion?.options ?? [];
 
