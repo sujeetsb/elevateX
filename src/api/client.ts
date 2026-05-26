@@ -10,20 +10,26 @@ export type ApiRequestOptions = RequestInit & {
  * Typed fetch for production. Throws {@link ApiError} on non-2xx.
  * When {@link isMockApiEnabled} is true, this is not used by domain helpers — call mock-specific functions instead.
  */
+type ApiEnvelope<T> = { ok?: boolean; data?: T; message?: string };
+
+function unwrapApiResponse<T>(json: unknown): T {
+  if (json && typeof json === 'object' && 'data' in json) {
+    const envelope = json as ApiEnvelope<T>;
+    if (envelope.data !== undefined) return envelope.data;
+  }
+  return json as T;
+}
+
 export async function apiRequest<T>(path: string, init: ApiRequestOptions = {}): Promise<T> {
   if (isMockApiEnabled()) {
     throw new ApiError(
-      'Mock API is enabled: use typed helpers (e.g. parseResumeFile) or set VITE_USE_MOCK_API=false with VITE_API_BASE_URL.',
+      'Mock API is enabled: set NEXT_PUBLIC_USE_MOCK_API=false or disable mock helpers.',
       501,
       'MOCK_MODE',
     );
   }
 
   const base = getApiBaseUrl();
-  if (!base) {
-    throw new ApiError('Missing VITE_API_BASE_URL while mock mode is disabled.', 0, 'MISSING_BASE_URL');
-  }
-
   const url = `${base}${path.startsWith('/') ? path : `/${path}`}`;
   const headers = new Headers(init.headers);
 
@@ -33,7 +39,7 @@ export async function apiRequest<T>(path: string, init: ApiRequestOptions = {}):
     }
   }
 
-  const res = await fetch(url, { ...init, headers });
+  const res = await fetch(url, { ...init, headers, credentials: init.credentials ?? 'include' });
   if (!res.ok) {
     throw await parseErrorResponse(res);
   }
@@ -44,7 +50,7 @@ export async function apiRequest<T>(path: string, init: ApiRequestOptions = {}):
 
   const ct = res.headers.get('content-type');
   if (ct?.includes('application/json')) {
-    return (await res.json()) as T;
+    return unwrapApiResponse<T>(await res.json());
   }
 
   return (await res.text()) as unknown as T;

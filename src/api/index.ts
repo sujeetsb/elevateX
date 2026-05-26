@@ -4,5 +4,5 @@ export { apiRequest } from './client';
 export type { ApiRequestOptions } from './client';
 export { parseResumeFile, parseResumeText } from './onboarding';
 export type { ResumeParseResult } from './onboarding';
-export { submitCourseGenerationRequest } from './courses';
-export type { CourseGenerationPayload } from './courses';
+export { submitCourseGenerationRequest, fetchUserCourses, fetchCourseById, enrollInCourse, completeCourseLesson, fetchRecommendedCourses } from './courses';
+export type { CourseGenerationPayload, CourseGenerationResult, RecommendedCourse } from './courses';

@@ -58,5 +58,6 @@ export function heuristicResumeParse(rawText: string): ResumeParseResult {
     // Empty skills array is fine — mergeParsed merges additively, Inngest will fill the real list
     skills: skills.slice(0, 16),
     summary: `Imported resume (${lines.length} lines). ${emailMatch ? 'Email detected. ' : ''}${phoneMatch ? 'Phone detected. ' : ''}AI will refine profile after upload.`,
+    email: emailMatch?.[0] ?? undefined,
   };
 }

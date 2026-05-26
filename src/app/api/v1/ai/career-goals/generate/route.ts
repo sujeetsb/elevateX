@@ -5,6 +5,7 @@ import { handleApiError } from '@/server/errors/handler';
 import { unauthorized } from '@/server/errors/http-error';
 import { generateJsonText } from '@/server/ai/gemini';
 import { logger } from '@/server/logger';
+import { getUserInsights } from '@/server/services/user-insights.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +49,14 @@ export async function POST() {
     const session = await getSession();
     if (!session?.user?.id) throw unauthorized();
 
+    const insights = await getUserInsights(session.user.id);
+    if (insights?.careerGoals) {
+      const goals = insights.careerGoals as string[];
+      if (Array.isArray(goals) && goals.length >= 3) {
+        return NextResponse.json({ ok: true, data: { suggestions: goals.slice(0, 3), cached: true, source: 'user_insights' } });
+      }
+    }
+
     const profile = await prisma.profile.findUnique({ where: { userId: session.user.id } });
 
     const currentRole = profile?.currentRole ?? '';
@@ -82,6 +91,9 @@ export async function POST() {
           `Experience: ${profile?.experienceYears || 'Not specified'}`,
           `Education: ${profile?.education?.slice(0, 200) || 'Not specified'}`,
           `Industry: ${profile?.preferredIndustry || 'Not specified'}`,
+          `Current salary: ${profile?.currentSalary || 'Not specified'}`,
+          `Salary expectation: ${profile?.salaryExpectation || 'Not specified'}`,
+          `Salary currency: ${profile?.salaryCurrency || 'Not specified'}`,
           '',
           'Generate exactly 3 realistic, inspiring career goal statements for this professional.',
           'Each should describe a clear trajectory above their current level.',

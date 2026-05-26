@@ -7,8 +7,12 @@ import { Bell, Moon, Sun, Monitor, Flame, Zap, Target, TrendingUp, ChevronRight,
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer, AreaChart, Area, Tooltip, XAxis } from 'recharts';
 import { useGame } from '../components/GameContext';
 import { useTheme } from '../components/ThemeContext';
+import { SalaryIntelligence } from '../components/SalaryIntelligence';
 import { listRecentResumes, listOptimizationHistory, getTemplateUsageStats } from '../lib/resume/storage';
 import type { OptimizationHistoryEntry, SavedResumeMeta } from '../lib/resume/types';
+import { getAtsDashboardInsight, getAtsActiveInsight, getAtsMessage } from '@/lib/ats/messaging';
+import { SubscriptionUpgradeModal } from '../components/SubscriptionUpgradeModal';
+import { isProTierClient } from '@/lib/subscription/tier';
 import { getTemplateMeta } from '../lib/resume/templates';
 
 /** DB resume row (lightweight) returned by GET /api/v1/resumes */
@@ -16,7 +20,7 @@ interface DbResumeMeta {
   id: string;
   title: string;
   parseStatus: string;
-  parsedJson: Record<string, unknown> | null;
+  parsedJson?: Record<string, unknown> | null;
   atsScore: number | null;
   updatedAt: string;
   createdAt: string;
@@ -78,7 +82,7 @@ function DashboardSkeleton() {
 
 export function Dashboard() {
   const router = useRouter();
-  const { user, xp, level, levelName, currentLevelXp, totalXpForNextLevel, streak, profileCompletion, atsScore, badges, courses, claimDailyBonus, alreadyClaimedToday, isHydrating } = useGame();
+  const { user, xp, level, levelName, currentLevelXp, totalXpForNextLevel, streak, profileCompletion, atsScore, badges, courses, jobs, claimDailyBonus, alreadyClaimedToday, isHydrating } = useGame();
   const { theme, setTheme } = useTheme();
   const [claimedDaily, setClaimedDaily] = useState(false);
   const [dailyClaimBusy, setDailyClaimBusy] = useState(false);
@@ -119,7 +123,7 @@ export function Dashboard() {
     setDbResumesLoading(true);
     void (async () => {
       try {
-        const res = await fetch('/api/v1/resumes', { credentials: 'include' });
+        const res = await fetch('/api/v1/resumes?meta=1', { credentials: 'include' });
         if (!res.ok) return;
         const json = await res.json();
         const list = Array.isArray(json?.data) ? (json.data as DbResumeMeta[]) : [];
@@ -133,20 +137,23 @@ export function Dashboard() {
     })();
   }, [user.email]);
 
+  const atsMsg = getAtsMessage(atsScore);
   const aiMessages = [
     `💡 You're only ${100 - profileCompletion}% away from unlocking Expert AI features!`,
     `🔥 ${streak} day streak! Keep going to earn the Week Warrior badge!`,
     `🎯 Add certifications to boost your profile by 10% and gain +150 XP!`,
-    `📊 Your ATS score of ${atsScore} can be improved to 85+ — I'll guide you!`,
+    getAtsDashboardInsight(atsScore),
   ];
   const [aiMsgIndex] = useState(Math.floor(Math.random() * aiMessages.length));
 
   const earnedBadges = badges.filter(b => b.earnedAt);
+  const atsInsight = getAtsActiveInsight(atsScore);
   const activeInsights = [
-    { icon: '⚡', text: 'Improve ATS score by 10% to unlock Expert badge', xp: 250, action: '/app/ats' },
+    ...(atsInsight ? [{ icon: atsInsight.icon, text: atsInsight.text, xp: 250, action: atsInsight.action }] : []),
     { icon: '🐙', text: 'Add GitHub portfolio to gain +150 XP', xp: 150, action: '/app/profile' },
     { icon: '📜', text: 'Add a certification to complete your profile', xp: 120, action: '/app/profile' },
   ];
+  const [showSubscribe, setShowSubscribe] = useState(false);
 
   if (isHydrating) return <DashboardSkeleton />;
 
@@ -176,8 +183,8 @@ export function Dashboard() {
             {theme === 'light'
               ? <Sun size={17} color="#f59e0b" />
               : theme === 'system'
-              ? <Monitor size={17} color="#94a3b8" />
-              : <Moon size={17} color="#a78bfa" />}
+                ? <Monitor size={17} color="#94a3b8" />
+                : <Moon size={17} color="#a78bfa" />}
           </button>
           <button onClick={() => router.push('/app/profile')} className="w-9 h-9 rounded-xl flex items-center justify-center overflow-hidden"
             style={{ background: 'linear-gradient(135deg, #7c3aed, #06b6d4)' }}>
@@ -299,7 +306,7 @@ export function Dashboard() {
       <div className="section-pad mb-4">
         <div className="responsive-grid-3">
           {[
-            { label: 'ATS Score', value: `${atsScore}`, unit: '/100', icon: '🎯', color: atsScore > 70 ? '#10b981' : '#f59e0b', path: '/app/ats' },
+            { label: 'ATS Score', value: `${atsScore}`, unit: '/100', icon: '🎯', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b', path: '/app/ats' },
             { label: 'Job Match', value: '87', unit: '%', icon: '💼', color: '#06b6d4', path: '/app/jobs' },
             { label: 'Courses', value: `${courses.length}`, unit: '', icon: '📚', color: '#a78bfa', path: '/app/courses' },
           ].map(stat => (
@@ -314,54 +321,65 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Salary Insights */}
-      {user.currentSalary && (
-        <div className="section-pad mb-4">
-          <div className="glass-card rounded-3xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Salary Insights</h3>
-              <span style={{ color: 'var(--cp-text-faint)', fontSize: '0.72rem' }}>{user.salaryCurrency || 'USD'}</span>
-            </div>
-            {(() => {
-              const curr = Number(user.currentSalary) || 0;
-              const currency = user.salaryCurrency || 'USD';
-              const symbol = currency === 'INR' ? '₹' : '$';
-              const fmt = (n: number) => currency === 'INR'
-                ? n >= 100000 ? `${(n / 100000).toFixed(1)}L` : `${(n / 1000).toFixed(0)}K`
-                : n >= 1000 ? `$${(n / 1000).toFixed(0)}K` : `$${n}`;
-              const industryAvg = Math.round(curr * 1.4);
-              const targetSalary = Math.round(curr * 1.8);
-              const growth = Math.round(((targetSalary - curr) / curr) * 100);
-              const bars = [
-                { label: 'Current', value: curr, color: '#06b6d4', pct: 55 },
-                { label: 'Industry Avg', value: industryAvg, color: '#7c3aed', pct: 70 },
-                { label: 'Target Role', value: targetSalary, color: '#10b981', pct: 90 },
-              ];
-              return (
-                <div>
-                  <div className="space-y-3 mb-4">
-                    {bars.map(b => (
-                      <div key={b.label}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>{b.label}</span>
-                          <span style={{ color: b.color, fontWeight: 700, fontSize: '0.88rem' }}>{symbol}{fmt(b.value)}</span>
-                        </div>
-                        <div className="rounded-full overflow-hidden" style={{ background: 'var(--cp-bg-elevated)', height: '6px' }}>
-                          <div className="h-full rounded-full transition-all" style={{ width: `${b.pct}%`, background: b.color }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="rounded-2xl p-3 text-center" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)' }}>
-                    <div style={{ color: '#10b981', fontWeight: 700, fontSize: '1.1rem' }}>+{growth}% Potential Growth</div>
-                    <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>Based on your target role &amp; industry</div>
-                  </div>
-                </div>
-              );
-            })()}
+      {/* Profile Strength */}
+      <div className="section-pad mb-4">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="glass-card rounded-3xl p-5"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Profile Strength</h3>
+            <button onClick={() => router.push('/app/profile')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>
+              Boost →
+            </button>
           </div>
-        </div>
-      )}
+          <div className="flex items-center gap-5">
+            <div className="relative">
+              <ProfileRing completion={profileCompletion} />
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-gradient" style={{ fontWeight: 700, fontSize: '1rem' }}>{profileCompletion}%</div>
+                </div>
+              </div>
+            </div>
+            <div className="flex-1 space-y-2">
+              {[
+                { label: 'Resume', done: true, xp: 20 },
+                { label: 'LinkedIn', done: !!user.linkedIn, xp: 10 },
+                { label: 'GitHub', done: !!user.github, xp: 10 },
+                { label: 'Certifications', done: user.certifications.length > 0, xp: 10 },
+                { label: 'ATS Optimized', done: user.atsOptimized, xp: 15 },
+              ].map(item => (
+                <div key={item.label} className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full flex items-center justify-center"
+                      style={{ background: item.done ? '#10b981' : 'rgba(255,255,255,0.1)' }}>
+                      {item.done && <span style={{ color: 'white', fontSize: '7px' }}>✓</span>}
+                    </div>
+                    <span style={{ color: item.done ? 'var(--cp-text-muted)' : 'var(--cp-text-primary)', fontSize: '0.78rem' }}>{item.label}</span>
+                  </div>
+                  <span style={{ color: item.done ? '#475569' : '#f59e0b', fontSize: '0.72rem' }}>
+                    {item.done ? 'Done' : `+${item.xp}%`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Unified Salary Intelligence */}
+      <div className="section-pad mb-4">
+        <SalaryIntelligence
+          compact
+          userCurrentSalary={user.currentSalary}
+          salaryCurrency={user.salaryCurrency}
+          country={user.country}
+          profileVersion={user.profileVersion}
+        />
+      </div>
 
       {/* Resume library & AI history */}
       <div className="section-pad mb-4">
@@ -484,54 +502,7 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* Profile Strength */}
-      <div className="section-pad mb-4">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-          className="glass-card rounded-3xl p-5"
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Profile Strength</h3>
-            <button onClick={() => router.push('/app/profile')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>
-              Boost →
-            </button>
-          </div>
-          <div className="flex items-center gap-5">
-            <div className="relative">
-              <ProfileRing completion={profileCompletion} />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="text-center">
-                  <div className="text-gradient" style={{ fontWeight: 700, fontSize: '1rem' }}>{profileCompletion}%</div>
-                </div>
-              </div>
-            </div>
-            <div className="flex-1 space-y-2">
-              {[
-                { label: 'Resume', done: true, xp: 20 },
-                { label: 'LinkedIn', done: !!user.linkedIn, xp: 10 },
-                { label: 'GitHub', done: !!user.github, xp: 10 },
-                { label: 'Certifications', done: user.certifications.length > 0, xp: 10 },
-                { label: 'ATS Optimized', done: user.atsOptimized, xp: 15 },
-              ].map(item => (
-                <div key={item.label} className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full flex items-center justify-center"
-                      style={{ background: item.done ? '#10b981' : 'rgba(255,255,255,0.1)' }}>
-                      {item.done && <span style={{ color: 'white', fontSize: '7px' }}>✓</span>}
-                    </div>
-                    <span style={{ color: item.done ? 'var(--cp-text-muted)' : 'var(--cp-text-primary)', fontSize: '0.78rem' }}>{item.label}</span>
-                  </div>
-                  <span style={{ color: item.done ? '#475569' : '#f59e0b', fontSize: '0.72rem' }}>
-                    {item.done ? 'Done' : `+${item.xp}%`}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-      </div>
+
 
       {/* AI Insights */}
       <div className="section-pad mb-4">
@@ -622,9 +593,9 @@ export function Dashboard() {
                   height: '24px',
                   background: d.value === 0 ? 'var(--cp-bg-elevated)'
                     : d.value === 1 ? 'rgba(124,58,237,0.25)'
-                    : d.value === 2 ? 'rgba(124,58,237,0.5)'
-                    : d.value === 3 ? 'rgba(124,58,237,0.75)'
-                    : '#7c3aed',
+                      : d.value === 2 ? 'rgba(124,58,237,0.5)'
+                        : d.value === 3 ? 'rgba(124,58,237,0.75)'
+                          : '#7c3aed',
                 }}
               />
             ))}
@@ -647,7 +618,15 @@ export function Dashboard() {
           <button onClick={() => router.push('/app/courses')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>See all →</button>
         </div>
         <div className="space-y-3">
-          {courses.slice(0, 2).map(course => (
+          {courses.length === 0 ? (
+            <div className="glass-card rounded-2xl p-4 text-center">
+              <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.85rem', marginBottom: '8px' }}>No courses yet — generate your first AI course.</p>
+              <button type="button" onClick={() => router.push('/app/courses')} className="btn-primary text-sm px-4 py-2 rounded-xl">
+                Browse Courses
+              </button>
+            </div>
+          ) : (
+            courses.slice(0, 2).map(course => (
             <motion.button
               key={course.id}
               onClick={() => router.push(`/app/courses/${course.id}`)}
@@ -667,7 +646,8 @@ export function Dashboard() {
                 <ChevronRight size={14} color="#475569" />
               </div>
             </motion.button>
-          ))}
+            ))
+          )}
         </div>
       </div>
 
@@ -685,8 +665,8 @@ export function Dashboard() {
                   style={{
                     background: badge.rarity === 'legendary' ? 'linear-gradient(135deg, #f59e0b, #fbbf24)' :
                       badge.rarity === 'epic' ? 'linear-gradient(135deg, #7c3aed, #a78bfa)' :
-                      badge.rarity === 'rare' ? 'linear-gradient(135deg, #06b6d4, #0891b2)' :
-                      'rgba(255,255,255,0.1)',
+                        badge.rarity === 'rare' ? 'linear-gradient(135deg, #06b6d4, #0891b2)' :
+                          'rgba(255,255,255,0.1)',
                     boxShadow: badge.rarity === 'legendary' ? '0 0 15px rgba(245,158,11,0.4)' :
                       badge.rarity === 'epic' ? '0 0 15px rgba(124,58,237,0.4)' : 'none',
                   }}>
@@ -713,10 +693,18 @@ export function Dashboard() {
           <button onClick={() => router.push('/app/jobs')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>See all →</button>
         </div>
         <div className="space-y-3">
-          {[
-            { company: 'Notion', role: 'Frontend Engineer', match: 95, logo: '📝', salary: '$130k–$170k' },
-            { company: 'Vercel', role: 'React Developer', match: 92, logo: '▲', salary: '$140k–$180k' },
-          ].map((job, i) => (
+          {(jobs.length > 0
+            ? jobs.slice(0, 2).map(job => ({
+              company: job.company,
+              role: job.title,
+              match: job.matchPercent,
+              logo: job.logo || '🏢',
+              salary: job.salary || 'Salary not listed',
+            }))
+            : [
+              { company: 'Notion', role: 'Frontend Engineer', match: 95, logo: '📝', salary: '$130k–$170k' },
+              { company: 'Vercel', role: 'React Developer', match: 92, logo: '▲', salary: '$140k–$180k' },
+            ]).map((job, i) => (
             <motion.button
               key={i}
               onClick={() => router.push('/app/jobs')}
@@ -736,6 +724,24 @@ export function Dashboard() {
           ))}
         </div>
       </div>
+
+      {!isProTierClient(user.subscriptionTier) && (
+        <div className="section-pad mb-4">
+          <button
+            type="button"
+            onClick={() => setShowSubscribe(true)}
+            className="w-full glass-card-purple rounded-2xl p-4 flex items-center justify-between text-left"
+          >
+            <div>
+              <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.9rem' }}>Upgrade to PRO</div>
+              <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>Unlock apply, cover letters & job-tailored resumes</div>
+            </div>
+            <span style={{ color: '#a78bfa', fontWeight: 700, fontSize: '0.85rem' }}>Subscribe →</span>
+          </button>
+        </div>
+      )}
+
+      <SubscriptionUpgradeModal open={showSubscribe} onOpenChange={setShowSubscribe} />
     </div>
   );
 }

@@ -213,7 +213,7 @@ export function Landing() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2"
+                  // className="absolute right-4 top-1/2 -translate-y-1/2"
                   style={{ color: 'var(--cp-text-muted)' }}
                 >
                   {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}

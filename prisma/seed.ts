@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 const prisma = new PrismaClient();
 
 const LEGACY_DEMO_EMAILS = ['alice@careerpilot.demo', 'bob@careerpilot.demo', 'admin@careerpilot.demo'];
-const DEMO_EMAILS = ['alice@elevatex.demo', 'bob@elevatex.demo', 'admin@elevatex.demo'];
+const DEMO_EMAILS = ['alice@elevatex.demo', 'bob@elevatex.demo', 'admin@elevatex.demo', 'admin@elevatex.ai'];
 
 async function main() {
   await prisma.user.deleteMany({ where: { email: { in: [...DEMO_EMAILS, ...LEGACY_DEMO_EMAILS] } } });
@@ -32,6 +32,7 @@ async function main() {
           preferredIndustry: 'Technology',
           careerGoal: 'Lead platform team',
           onboardingComplete: true,
+          subscriptionTier: 'PRO',
         },
       },
       jobPreferences: {
@@ -85,9 +86,20 @@ async function main() {
   await prisma.user.create({
     data: {
       email: 'admin@elevatex.demo',
-      name: 'Admin',
+      name: 'Admin (demo)',
       passwordHash,
-      role: UserRole.ADMIN,
+      role: UserRole.SUPER_ADMIN,
+      profile: { create: { onboardingComplete: true } },
+      analytics: { create: {} },
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      email: 'admin@elevatex.ai',
+      name: 'ElevateX Admin',
+      passwordHash,
+      role: UserRole.SUPER_ADMIN,
       profile: { create: { onboardingComplete: true } },
       analytics: { create: {} },
     },

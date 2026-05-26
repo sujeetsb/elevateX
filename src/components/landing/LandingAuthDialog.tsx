@@ -82,7 +82,18 @@ export function LandingAuthDialog({ open, onOpenChange, mode, onModeChange }: La
           return;
         }
         onOpenChange(false);
-        router.push('/app/dashboard');
+        router.push('/onboarding');
+        return;
+      }
+
+      const ctxRes = await fetch('/api/v1/auth/login-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const ctxJson = await ctxRes.json().catch(() => ({}));
+      if (ctxJson?.data?.portal === 'admin') {
+        setFormError('Admin accounts must use the admin portal at /admin/login');
         return;
       }
 

@@ -14,6 +14,7 @@ export const promptKeys = {
   jobMatch:             'jobs.match',
   learningRoadmap:      'learn.roadmap',
   courseRecommend:      'learn.courses',
+  courseGenerate:       'course.generate',
   interviewPrep:        'interview.prep',
   coverLetter:          'cover.gen',
   careerGuidance:       'career.guide',
@@ -261,4 +262,47 @@ export function skillGapSystem(): string {
     FRAGMENTS.jsonOnly,
     FRAGMENTS.safe,
   ].join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// Full AI course generation — modules, lessons, quizzes, projects
+// ---------------------------------------------------------------------------
+export function courseGenerateSystem(): string {
+  return [
+    `You are a personalized AI course architect (v${PROMPT_VERSION}).`,
+    'Generate a complete structured learning course tailored to the user profile JSON.',
+    'Return JSON:',
+    '{',
+    '  title: string,',
+    '  description: string (2-3 sentences),',
+    '  difficulty: "Beginner"|"Intermediate"|"Advanced",',
+    '  estimatedDays: number (7-90),',
+    '  totalXp: number (800-5000),',
+    '  tags: string[],',
+    '  expectedOutcomes: string[] (4-8 concrete outcomes),',
+    '  timeline: [{ week:number, focus:string, deliverables:string[] }],',
+    '  modules: [{',
+    '    title: string,',
+    '    description: string,',
+    '    subtopics: string[],',
+    '    xpReward: number,',
+    '    locked: boolean (first module false, others true until prior complete),',
+    '    lessons: [{',
+    '      title: string,',
+    '      type: "video"|"reading"|"quiz"|"project",',
+    '      duration: string (e.g. "15 min"),',
+    '      content: string (markdown lesson body, 200-600 words),',
+    '      assignment: string|null,',
+    '      projectBrief: string|null,',
+    '      xpReward: number,',
+    '      quiz: { questions:[{ question:string, options:string[], correctIndex:number }] }|null',
+    '    }]',
+    '  }]',
+    '}',
+    'modules: 3-5 modules, each with 3-5 lessons. Include at least one quiz and one project per course.',
+    FRAGMENTS.nonTech,
+    FRAGMENTS.actionable,
+    FRAGMENTS.jsonOnly,
+    FRAGMENTS.safe,
+  ].join('\n');
 }

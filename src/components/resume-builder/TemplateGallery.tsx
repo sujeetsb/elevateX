@@ -22,6 +22,12 @@ export interface TemplateGalleryProps {
 
 export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGalleryProps) {
   const [previewId, setPreviewId] = useState<ResumeTemplateId | null>(null);
+  const templateOptions = RESUME_TEMPLATES
+    .filter(t => t.id === 'minimal' || t.id === 'modern-saas' || t.id === 'corporate')
+    .map(t => ({
+      ...t,
+      name: t.id === 'modern-saas' ? 'Modern' : t.id === 'corporate' ? 'Professional' : t.name,
+    }));
 
   return (
     <div>
@@ -34,7 +40,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {RESUME_TEMPLATES.map((t, i) => {
+        {templateOptions.map((t, i) => {
           const active = selectedId === t.id;
           return (
             <motion.button
@@ -109,7 +115,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
         >
           <DialogHeader>
             <DialogTitle style={{ color: 'var(--cp-text-primary)' }}>
-              {previewId ? RESUME_TEMPLATES.find(x => x.id === previewId)?.name : 'Template'}
+              {previewId ? templateOptions.find(x => x.id === previewId)?.name : 'Template'}
             </DialogTitle>
             <DialogDescription style={{ color: 'var(--cp-text-muted)' }}>
               Desktop preview · responsive layout is simulated in the editor step.

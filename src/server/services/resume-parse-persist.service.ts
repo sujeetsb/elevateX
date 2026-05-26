@@ -56,6 +56,26 @@ export async function persistResumeIntelligence(resumeId: string, data: ResumeIn
           data.headline?.trim() ||
           data.targetRolesSuggested?.[0] ||
           (data.personal?.fullName ? `${String(data.personal.fullName).split(' ')[0]} — professional` : undefined);
+        const firstExp = data.experience?.[0];
+        const currentRoleFromExperience =
+          firstExp?.title?.trim() || firstExp?.role?.trim() || undefined;
+        const existingProfile = await tx.profile.findUnique({
+          where: { userId },
+          select: {
+            id: true,
+            onboardingComplete: true,
+            headline: true,
+            bio: true,
+            currentRole: true,
+            experienceYears: true,
+            education: true,
+            targetRole: true,
+            linkedInUrl: true,
+            githubUrl: true,
+            portfolioUrl: true,
+          },
+        });
+        const preserveUserEdits = Boolean(existingProfile?.onboardingComplete);
 
         await tx.profile.upsert({
           where: { userId },
@@ -63,7 +83,7 @@ export async function persistResumeIntelligence(resumeId: string, data: ResumeIn
             userId,
             headline,
             bio: data.summary ?? undefined,
-            currentRole: data.targetRolesSuggested?.[0] ?? undefined,
+            currentRole: currentRoleFromExperience,
             experienceYears:
               data.yearsOfExperienceApprox != null ? String(data.yearsOfExperienceApprox) : undefined,
             education: educationText(data.education),
@@ -74,16 +94,18 @@ export async function persistResumeIntelligence(resumeId: string, data: ResumeIn
             onboardingComplete: false,
           },
           update: {
-            headline,
-            bio: data.summary ?? undefined,
-            currentRole: data.targetRolesSuggested?.[0] ?? undefined,
+            headline: preserveUserEdits && existingProfile?.headline ? existingProfile.headline : headline,
+            bio: preserveUserEdits && existingProfile?.bio ? existingProfile.bio : (data.summary ?? undefined),
+            currentRole: preserveUserEdits && existingProfile?.currentRole ? existingProfile.currentRole : currentRoleFromExperience,
             experienceYears:
-              data.yearsOfExperienceApprox != null ? String(data.yearsOfExperienceApprox) : undefined,
-            education: educationText(data.education),
-            targetRole: data.targetRolesSuggested?.[0] ?? undefined,
-            linkedInUrl: normalizeOptionalHttpUrl(data.personal?.linkedIn),
-            githubUrl: normalizeOptionalHttpUrl(data.personal?.github),
-            portfolioUrl: normalizeOptionalHttpUrl(data.personal?.portfolio ?? data.personal?.website),
+              preserveUserEdits && existingProfile?.experienceYears
+                ? existingProfile.experienceYears
+                : (data.yearsOfExperienceApprox != null ? String(data.yearsOfExperienceApprox) : undefined),
+            education: preserveUserEdits && existingProfile?.education ? existingProfile.education : educationText(data.education),
+            targetRole: preserveUserEdits && existingProfile?.targetRole ? existingProfile.targetRole : (data.targetRolesSuggested?.[0] ?? undefined),
+            linkedInUrl: preserveUserEdits && existingProfile?.linkedInUrl ? existingProfile.linkedInUrl : normalizeOptionalHttpUrl(data.personal?.linkedIn),
+            githubUrl: preserveUserEdits && existingProfile?.githubUrl ? existingProfile.githubUrl : normalizeOptionalHttpUrl(data.personal?.github),
+            portfolioUrl: preserveUserEdits && existingProfile?.portfolioUrl ? existingProfile.portfolioUrl : normalizeOptionalHttpUrl(data.personal?.portfolio ?? data.personal?.website),
           },
         });
 
@@ -164,6 +186,9 @@ export async function persistResumeIntelligence(resumeId: string, data: ResumeIn
   );
 
   await batchLinkUserSkills(userId, data.skills, 'resume_ai', 48);
+
+  const { bumpProfileVersion } = await import('@/server/services/profile-version.service');
+  await bumpProfileVersion(userId);
 
   await cacheService.invalidateUser(userId);
 

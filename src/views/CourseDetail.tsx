@@ -1,12 +1,14 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, Lock, Check, Play, BookOpen, HelpCircle, Hammer, Zap, ChevronDown, ChevronUp, Trophy } from 'lucide-react';
-import { useGame } from '../components/GameContext';
+import { ArrowLeft, Lock, Check, Play, BookOpen, HelpCircle, Hammer, Zap, ChevronDown, ChevronUp, Trophy, Loader2 } from 'lucide-react';
+import { useGame, type Course } from '../components/GameContext';
 import { CareerDialog } from '../components/CareerDialog';
 import { DialogTitle } from '../components/ui/dialog';
+import { fetchCourseById } from '@/api';
+import { normalizeCourse } from '@/lib/courses/normalize';
 
 const lessonIcons: Record<string, ReactNode> = {
   video: <Play size={14} />,
@@ -21,6 +23,11 @@ const lessonColors: Record<string, string> = {
   quiz: '#f59e0b',
   project: '#10b981',
 };
+
+function parseDurationMinutes(duration?: string): number {
+  const n = Number((duration ?? '').match(/\d+/)?.[0] ?? 0);
+  return Number.isFinite(n) && n > 0 ? n : 15;
+}
 
 const mockLessonContent = `## Introduction to React Native Navigation
 
@@ -87,15 +94,49 @@ export function CourseDetail() {
   const rawId = params.id;
   const id = typeof rawId === 'string' ? rawId : Array.isArray(rawId) ? rawId[0] : undefined;
   const router = useRouter();
-  const { courses, completeLesson } = useGame();
+  const { courses, completeLesson, addCourse } = useGame();
   const [expandedModule, setExpandedModule] = useState<string | null>(null);
   const [activeLesson, setActiveLesson] = useState<{ courseId: string; moduleId: string; lessonId: string } | null>(null);
   const [showQuiz, setShowQuiz] = useState(false);
   const [quizLessonTarget, setQuizLessonTarget] = useState<{ moduleId: string; lessonId: string } | null>(null);
   const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
   const [quizSubmitted, setQuizSubmitted] = useState(false);
+  const [dynamicQuizByLesson, setDynamicQuizByLesson] = useState<Record<string, Array<{ question: string; options: string[]; correctIndex: number; difficulty?: string }>>>({});
+  const [loadingCourse, setLoadingCourse] = useState(false);
+  const [localCourse, setLocalCourse] = useState<Course | null>(null);
 
-  const course = courses.find(c => c.id === id);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const courseFromContext = courses.find(c => c.id === id);
+  const contextHasModules = Boolean(courseFromContext?.modules?.length);
+  const course = (contextHasModules ? courseFromContext : null) ?? localCourse ?? courseFromContext ?? null;
+
+  const loadCourse = async (courseId: string) => {
+    setLoadingCourse(true);
+    setLoadError(null);
+    try {
+      const c = await fetchCourseById(courseId);
+      const normalized = normalizeCourse(c);
+      if (!normalized) {
+        setLoadError('Course data was incomplete.');
+        setLocalCourse(null);
+        return;
+      }
+      setLocalCourse(normalized);
+      addCourse(normalized);
+    } catch {
+      setLoadError('Could not load this course.');
+      setLocalCourse(null);
+    } finally {
+      setLoadingCourse(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!id) return;
+    if (contextHasModules) return;
+    void loadCourse(id);
+  }, [id, contextHasModules]);
 
   useEffect(() => {
     if (!course) return;
@@ -106,7 +147,12 @@ export function CourseDetail() {
 
   const handleCompleteLesson = (moduleId: string, lessonId: string, xpReward = 80) => {
     if (!course) return;
-    completeLesson(course.id, moduleId, lessonId, xpReward);
+    const lessonDuration = course.modules
+      .find(m => m.id === moduleId)
+      ?.lessons.find(l => l.id === lessonId)?.duration;
+    completeLesson(course.id, moduleId, lessonId, xpReward, {
+      timeSpentMinutes: parseDurationMinutes(lessonDuration),
+    });
     setActiveLesson(null);
 
     // Auto-progression: after all lessons in this module complete, open next module after 1.5s
@@ -126,14 +172,36 @@ export function CourseDetail() {
     }
   };
 
+  if (loadingCourse) {
+    return (
+      <div className="app-page section-pad py-16 flex flex-col items-center">
+        <Loader2 className="animate-spin text-violet-400 mb-3" size={32} />
+        <p style={{ color: 'var(--cp-text-muted)' }}>Loading course…</p>
+      </div>
+    );
+  }
+
   if (!course) {
     return (
       <div className="app-page section-pad py-16 text-center" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
-        <p style={{ color: 'var(--cp-text-muted)' }} className="mb-4">We could not find this course.</p>
+        <p style={{ color: 'var(--cp-text-muted)' }} className="mb-4">
+          {loadError ?? 'This course is no longer available — it may have failed to save during generation. Generate a new course from the Courses page.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            if (!id) return;
+            void loadCourse(id);
+          }}
+          className="btn-primary rounded-xl px-6 py-3 mr-3"
+        >
+          Retry
+        </button>
         <button
           type="button"
           onClick={() => router.push('/app/courses')}
-          className="btn-primary rounded-xl px-6 py-3"
+          className="rounded-xl px-6 py-3 glass-card"
+          style={{ color: 'var(--cp-text-muted)' }}
         >
           Back to courses
         </button>
@@ -141,21 +209,80 @@ export function CourseDetail() {
     );
   }
 
-  const completedLessons = course.modules.flatMap(m => m.lessons).filter(l => l.completed).length;
-  const totalLessons = course.modules.flatMap(m => m.lessons).length;
+  const safeModules = Array.isArray(course.modules) ? course.modules : [];
+  const safeTags = Array.isArray(course.tags) ? course.tags : [];
+
+  const completedLessons = safeModules.flatMap(m => m.lessons ?? []).filter(l => l.completed).length;
+  const totalLessons = safeModules.flatMap(m => m.lessons ?? []).length;
+  const totalModules = safeModules.length;
+  const totalMinutes = safeModules
+    .flatMap(m => m.lessons ?? [])
+    .reduce((sum, l) => {
+      const mins = Number((l.duration ?? '').match(/\d+/)?.[0] ?? 0);
+      return sum + mins;
+    }, 0);
 
   const activeLessonRow =
     activeLesson &&
     course.modules
       .find(m => m.id === activeLesson.moduleId)
       ?.lessons.find(l => l.id === activeLesson.lessonId);
+  const activeQuizLesson = useMemo(
+    () =>
+      quizLessonTarget
+        ? course.modules
+          .find(m => m.id === quizLessonTarget.moduleId)
+          ?.lessons.find(l => l.id === quizLessonTarget.lessonId)
+        : null,
+    [course.modules, quizLessonTarget],
+  );
+  const activeQuizQuestions = useMemo(() => {
+    const fromDynamic = quizLessonTarget?.lessonId ? dynamicQuizByLesson[quizLessonTarget.lessonId] : undefined;
+    if (Array.isArray(fromDynamic) && fromDynamic.length > 0) return fromDynamic;
+    return Array.isArray(activeQuizLesson?.quiz) ? activeQuizLesson.quiz : [];
+  }, [activeQuizLesson?.quiz, dynamicQuizByLesson, quizLessonTarget?.lessonId]);
+  const activeQuizQuestion = activeQuizQuestions[0] ?? null;
+  const quizOptions = activeQuizQuestion?.options ?? [];
 
-  const quizOptions = [
-    'Expo Router uses file-system based routing',
-    'Expo Router uses class-based routing',
-    'Expo Router only supports web navigation',
-    'Expo Router requires manual route registration',
-  ];
+  const ensureDynamicQuiz = async (lessonId: string) => {
+    if (!course?.id || dynamicQuizByLesson[lessonId]?.length) return;
+    try {
+      const res = await fetch(`/api/v1/courses/${course.id}/quiz?lessonId=${encodeURIComponent(lessonId)}`, {
+        credentials: 'include',
+      });
+      const json = await res.json().catch(() => ({}));
+      const questions = Array.isArray(json?.data?.questions) ? json.data.questions : [];
+      if (questions.length > 0) {
+        setDynamicQuizByLesson(prev => ({ ...prev, [lessonId]: questions }));
+      }
+    } catch {
+      // fallback to lesson-level quiz from course payload
+    }
+  };
+
+  const completeQuizLesson = () => {
+    if (!quizLessonTarget) return;
+    const correct =
+      quizAnswer != null
+      && activeQuizQuestion != null
+      && quizAnswer === activeQuizQuestion.correctIndex;
+    if (correct) {
+      completeLesson(
+        course.id,
+        quizLessonTarget.moduleId,
+        quizLessonTarget.lessonId,
+        120,
+        {
+          quizScore: 100,
+          timeSpentMinutes: parseDurationMinutes(activeQuizLesson?.duration),
+        },
+      );
+    }
+    setShowQuiz(false);
+    setQuizAnswer(null);
+    setQuizSubmitted(false);
+    setQuizLessonTarget(null);
+  };
 
   return (
     <div className="app-page" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
@@ -192,6 +319,9 @@ export function CourseDetail() {
               <div style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.1rem' }}>
                 {completedLessons}/{totalLessons} Lessons
               </div>
+              <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.74rem', marginTop: '4px' }}>
+                {totalModules} modules · {totalMinutes > 0 ? `${totalMinutes} min` : `${course.estimatedDays} days`}
+              </div>
             </div>
             <div className="text-right">
               <div className="flex items-center gap-1 justify-end mb-1">
@@ -218,10 +348,10 @@ export function CourseDetail() {
       </div>
 
       {/* Tags */}
-      {course.tags.length > 0 && (
+      {safeTags.length > 0 && (
         <div className="section-pad mb-4">
           <div className="flex flex-wrap gap-2">
-            {course.tags.map(tag => (
+            {safeTags.map(tag => (
               <div key={tag} className="rounded-xl px-3 py-1.5"
                 style={{ background: 'var(--cp-bg-card)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>
                 {tag}
@@ -234,8 +364,23 @@ export function CourseDetail() {
       {/* Module journey */}
       <div className="section-pad mb-6">
         <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Learning Journey</h3>
+        {!loadingCourse && safeModules.length === 0 ? (
+          <div className="rounded-2xl p-4 glass-card" style={{ border: '1px dashed rgba(255,255,255,0.12)' }}>
+            <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.84rem', marginBottom: '10px' }}>
+              Course modules are not available yet for this course.
+            </p>
+            <button
+              type="button"
+              onClick={() => { if (id) void loadCourse(id); }}
+              className="rounded-xl px-4 py-2 text-sm font-semibold"
+              style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.35)', color: '#a78bfa' }}
+            >
+              Retry loading modules
+            </button>
+          </div>
+        ) : null}
         <div className="space-y-3">
-          {course.modules.map((mod, modIndex) => (
+          {safeModules.map((mod, modIndex) => (
             <div key={mod.id}>
               {/* Module connector dots */}
               {modIndex > 0 && (
@@ -306,6 +451,7 @@ export function CourseDetail() {
                                 setQuizAnswer(null);
                                 setQuizSubmitted(false);
                                 setQuizLessonTarget({ moduleId: mod.id, lessonId: lesson.id });
+                                void ensureDynamicQuiz(lesson.id);
                                 setShowQuiz(true);
                               } else {
                                 setActiveLesson({ courseId: course.id, moduleId: mod.id, lessonId: lesson.id });
@@ -368,7 +514,7 @@ export function CourseDetail() {
             </div>
 
             <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.85rem', lineHeight: '1.7' }} className="pb-4">
-              {mockLessonContent.split('\n').map((line, i) => {
+              {(activeLessonRow?.content?.trim() || mockLessonContent).split('\n').map((line, i) => {
                 if (line.startsWith('## ')) return <h2 key={i} style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.1rem', margin: '16px 0 8px' }}>{line.replace('## ', '')}</h2>;
                 if (line.startsWith('### ')) return <h3 key={i} style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.95rem', margin: '14px 0 6px' }}>{line.replace('### ', '')}</h3>;
                 if (line.startsWith('> ')) return <div key={i} className="rounded-xl p-3 my-3" style={{ background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.25)', color: '#a78bfa', fontSize: '0.82rem' }}>{line.replace('> ', '')}</div>;
@@ -387,7 +533,13 @@ export function CourseDetail() {
             <div className="sticky bottom-0 -mx-5 px-5 pb-2 pt-4" style={{ borderTop: '1px solid var(--cp-border)', background: 'var(--cp-bg-card-solid)' }}>
               <motion.button
                 type="button"
-                onClick={() => handleCompleteLesson(activeLesson.moduleId, activeLesson.lessonId)}
+                onClick={() =>
+                  handleCompleteLesson(
+                    activeLesson.moduleId,
+                    activeLesson.lessonId,
+                    80,
+                  )
+                }
                 whileTap={{ scale: 0.97 }}
                 className="btn-primary w-full py-4 rounded-2xl flex items-center justify-center gap-3"
                 style={{ fontWeight: 700, fontSize: '1rem' }}
@@ -417,6 +569,14 @@ export function CourseDetail() {
         <div className="flex items-center gap-2 mb-5 pr-8">
           <HelpCircle size={20} color="#f59e0b" />
           <h3 id="quiz-dialog-title" style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Knowledge Check</h3>
+          {typeof activeQuizQuestion?.difficulty === 'string' && (
+            <span
+              className="rounded-lg px-2 py-1 text-[10px] uppercase tracking-wide"
+              style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', color: '#fbbf24' }}
+            >
+              {activeQuizQuestion.difficulty}
+            </span>
+          )}
           <div className="ml-auto flex items-center gap-1" style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '12px', padding: '4px 10px' }}>
             <Zap size={12} color="#f59e0b" />
             <span style={{ color: '#f59e0b', fontSize: '0.8rem', fontWeight: 600 }}>+120 XP</span>
@@ -424,7 +584,7 @@ export function CourseDetail() {
         </div>
 
         <p style={{ color: 'var(--cp-text-primary)', fontSize: '0.95rem', fontWeight: 600, marginBottom: '20px' }}>
-          Which of the following best describes Expo Router's routing approach?
+          {activeQuizQuestion?.question ?? 'Which option best matches the lesson concept?'}
         </p>
 
         <div className="space-y-3 mb-6">
@@ -455,7 +615,7 @@ export function CourseDetail() {
                   </span>
                 </div>
                 <span style={{ color: 'var(--cp-text-primary)', fontSize: '0.88rem' }}>{option}</span>
-                {quizSubmitted && i === 0 && <Check size={16} color="#10b981" className="ml-auto shrink-0" />}
+                {quizSubmitted && activeQuizQuestion && i === activeQuizQuestion.correctIndex && <Check size={16} color="#10b981" className="ml-auto shrink-0" />}
               </div>
             </motion.button>
           ))}
@@ -464,23 +624,33 @@ export function CourseDetail() {
         {quizSubmitted ? (
           <div>
             <div className="rounded-2xl p-4 mb-4 text-center"
-              style={{ background: quizAnswer === 0 ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', border: `1px solid ${quizAnswer === 0 ? 'rgba(16,185,129,0.3)' : 'rgba(244,63,94,0.3)'}` }}>
-              <div className="text-2xl mb-1">{quizAnswer === 0 ? '🎉' : '💡'}</div>
-              <div style={{ color: quizAnswer === 0 ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
-                {quizAnswer === 0 ? 'Correct! +120 XP earned!' : 'Not quite! The correct answer is A.'}
+              style={{
+                background:
+                  activeQuizQuestion && quizAnswer === activeQuizQuestion.correctIndex
+                    ? 'rgba(16,185,129,0.1)'
+                    : 'rgba(244,63,94,0.1)',
+                border: `1px solid ${
+                  activeQuizQuestion && quizAnswer === activeQuizQuestion.correctIndex
+                    ? 'rgba(16,185,129,0.3)'
+                    : 'rgba(244,63,94,0.3)'
+                }`,
+              }}>
+              <div className="text-2xl mb-1">
+                {activeQuizQuestion && quizAnswer === activeQuizQuestion.correctIndex ? '🎉' : '💡'}
+              </div>
+              <div style={{ color: activeQuizQuestion && quizAnswer === activeQuizQuestion.correctIndex ? '#10b981' : '#f43f5e', fontWeight: 700 }}>
+                {activeQuizQuestion && quizAnswer === activeQuizQuestion.correctIndex
+                  ? 'Correct! +120 XP earned!'
+                  : `Not quite! The correct answer is ${
+                    activeQuizQuestion
+                      ? String.fromCharCode(65 + activeQuizQuestion.correctIndex)
+                      : 'A'
+                  }.`}
               </div>
             </div>
             <button
               type="button"
-              onClick={() => {
-                if (quizAnswer === 0 && quizLessonTarget) {
-                  completeLesson(course.id, quizLessonTarget.moduleId, quizLessonTarget.lessonId, 120);
-                }
-                setShowQuiz(false);
-                setQuizAnswer(null);
-                setQuizSubmitted(false);
-                setQuizLessonTarget(null);
-              }}
+              onClick={completeQuizLesson}
               className="btn-primary w-full py-3 rounded-xl"
               style={{ fontWeight: 600 }}
             >

@@ -7,6 +7,17 @@ import { Edit3, Plus, ExternalLink, ChevronRight, Zap, TrendingUp, BarChart2, Sh
 import { useGame } from '../components/GameContext';
 import type { UserCertification } from '../components/GameContext';
 import { ProfileMenuDropdown } from '../components/ProfileMenu';
+import {
+  PROFILE_TABS,
+  ProfileCoursesTab,
+  ProfileCertificatesTab,
+  ProfileSavedJobsTab,
+  ProfileAppliedJobsTab,
+  ProfileResumesTab,
+} from '../components/profile/ProfileExtraTabs';
+import { SubscriptionUpgradeModal } from '../components/SubscriptionUpgradeModal';
+import { isProTierClient } from '@/lib/subscription/tier';
+import { getAtsMessage } from '@/lib/ats/messaging';
 
 function ProfileRingSmall({ completion, color = '#7c3aed' }: { completion: number; color?: string }) {
   const r = 28;
@@ -29,8 +40,9 @@ function ProfileRingSmall({ completion, color = '#7c3aed' }: { completion: numbe
 
 export function Profile() {
   const router = useRouter();
-  const { user, xp, level, levelName, streak, profileCompletion, atsScore, badges, courses, addXP, updateProfile, signOut, refresh } = useGame();
-  const [activeTab, setActiveTab] = useState<'overview' | 'badges' | 'skills'>('overview');
+  const { user, xp, level, levelName, streak, profileCompletion, atsScore, badges, courses, addXP, updateProfile, signOut, refresh, isHydrating } = useGame();
+  const [activeTab, setActiveTab] = useState<(typeof PROFILE_TABS)[number]['id']>('overview');
+  const [showSubscribe, setShowSubscribe] = useState(false);
   const [editingSkills, setEditingSkills] = useState(false);
   const [newSkill, setNewSkill] = useState('');
   const [editingLink, setEditingLink] = useState<'linkedIn' | 'github' | null>(null);
@@ -89,6 +101,7 @@ export function Profile() {
   const [editCertDraft, setEditCertDraft] = useState<Partial<UserCertification & typeof blankCert>>({});
   const [deletingCertId, setDeletingCertId] = useState<string | null>(null);
 
+  const atsMsg = getAtsMessage(atsScore);
   const completedCourses = courses.filter(c => c.progress === 100).length;
   const earnedBadges = badges.filter(b => b.earnedAt);
   const lockedBadges = badges.filter(b => !b.earnedAt);
@@ -175,7 +188,7 @@ export function Profile() {
         <h1 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.3rem' }}>Profile</h1>
         <ProfileMenuDropdown
           onNavigate={path => router.push(path)}
-          onSignOut={() => { signOut(); router.push('/'); }}
+          onSignOut={() => { void signOut(); }}
         />
       </div>
 
@@ -232,7 +245,7 @@ export function Profile() {
       <div className="section-pad mb-5">
         <div className="responsive-grid-3">
           {[
-            { label: 'ATS Score', value: `${atsScore}`, icon: '🎯', path: '/app/ats', color: '#10b981' },
+            { label: 'ATS Score', value: `${atsScore}`, icon: '🎯', path: '/app/ats', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b' },
             { label: 'Analytics', value: 'View', icon: '📊', path: '/app/analytics', color: '#a78bfa' },
             { label: 'AI Mentor', value: 'Chat', icon: '🤖', path: '/app/mentor', color: '#06b6d4' },
           ].map(item => (
@@ -250,29 +263,48 @@ export function Profile() {
       </div>
 
       {/* Tab bar */}
-      <div className="section-pad mb-4">
-        <div className="flex rounded-2xl p-1" style={{ background: 'var(--cp-bg-card)' }}>
-          {(['overview', 'badges', 'skills'] as const).map(t => (
+      <div className="section-pad mb-4 overflow-x-auto">
+        <div className="flex gap-1 min-w-max rounded-2xl p-1" style={{ background: 'var(--cp-bg-card)' }}>
+          {PROFILE_TABS.map(({ id, label }) => (
             <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              className="flex-1 py-2.5 rounded-xl capitalize transition-all"
+              key={id}
+              type="button"
+              onClick={() => setActiveTab(id)}
+              className="py-2.5 px-3 rounded-xl transition-all whitespace-nowrap"
               style={{
-                background: activeTab === t ? 'rgba(124,58,237,0.25)' : 'transparent',
-                color: activeTab === t ? '#a78bfa' : '#64748b',
-                fontWeight: activeTab === t ? 600 : 400,
-                fontSize: '0.82rem',
-                border: activeTab === t ? '1px solid rgba(124,58,237,0.35)' : '1px solid transparent',
+                background: activeTab === id ? 'rgba(124,58,237,0.25)' : 'transparent',
+                color: activeTab === id ? '#a78bfa' : '#64748b',
+                fontWeight: activeTab === id ? 600 : 400,
+                fontSize: '0.78rem',
+                border: activeTab === id ? '1px solid rgba(124,58,237,0.35)' : '1px solid transparent',
               }}
             >
-              {t === 'overview' ? '👤 Profile' : t === 'badges' ? '🏆 Badges' : '⚡ Skills'}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
+      {!isProTierClient(user.subscriptionTier) && (
+        <div className="section-pad mb-2">
+          <button type="button" onClick={() => setShowSubscribe(true)} className="text-sm font-semibold" style={{ color: '#a78bfa' }}>
+            Subscribe to PRO →
+          </button>
+        </div>
+      )}
+      <SubscriptionUpgradeModal open={showSubscribe} onOpenChange={setShowSubscribe} />
+
       <AnimatePresence mode="wait">
-        {activeTab === 'overview' && (
+        {isHydrating && (
+          <motion.div key="profile-loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="section-pad mb-6">
+            <div className="animate-pulse space-y-3">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="rounded-2xl h-20" style={{ background: 'var(--cp-bg-card)' }} />
+              ))}
+            </div>
+          </motion.div>
+        )}
+        {!isHydrating && activeTab === 'overview' && (
           <motion.div key="overview" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
             className="section-pad space-y-4 mb-6">
             {/* Profile Strength */}
@@ -310,9 +342,9 @@ export function Profile() {
             <div className="glass-card rounded-3xl p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Career Details</h3>
-                <button
-                  onClick={() => {
-                    if (!editingCareer) {
+                {!editingCareer && (
+                  <button
+                    onClick={() => {
                       setCareerDraft({
                         currentRole: user.currentRole,
                         targetRole: user.targetRole,
@@ -322,14 +354,14 @@ export function Profile() {
                         careerGoal: user.careerGoal,
                         salaryGoal: user.salaryGoal,
                       });
-                    }
-                    setEditingCareer(v => !v);
-                  }}
-                  className="rounded-xl px-3 py-1.5"
-                  style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.35)', color: '#a78bfa', fontSize: '0.75rem', cursor: 'pointer' }}
-                >
-                  {editingCareer ? 'Done' : <><Edit3 size={12} style={{ display: 'inline', marginRight: 4 }} />Edit</>}
-                </button>
+                      setEditingCareer(true);
+                    }}
+                    className="rounded-xl px-3 py-1.5"
+                    style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.35)', color: '#a78bfa', fontSize: '0.75rem', cursor: 'pointer' }}
+                  >
+                    <Edit3 size={12} style={{ display: 'inline', marginRight: 4 }} />Edit
+                  </button>
+                )}
               </div>
 
               {editingCareer ? (
@@ -508,13 +540,15 @@ export function Profile() {
             <div className="glass-card rounded-3xl p-5 mt-4">
               <div className="flex items-center justify-between mb-3">
                 <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Salary & Location</h3>
-                <button
-                  onClick={() => setEditingSalary(v => !v)}
-                  className="rounded-xl px-3 py-1.5"
-                  style={{ background: 'var(--cp-accent-bg)', border: '1px solid var(--cp-border-accent)', color: 'var(--cp-accent-light)', fontSize: '0.75rem' }}
-                >
-                  {editingSalary ? 'Done' : 'Edit'}
-                </button>
+                {!editingSalary && (
+                  <button
+                    onClick={() => setEditingSalary(true)}
+                    className="rounded-xl px-3 py-1.5"
+                    style={{ background: 'var(--cp-accent-bg)', border: '1px solid var(--cp-border-accent)', color: 'var(--cp-accent-light)', fontSize: '0.75rem' }}
+                  >
+                    Edit
+                  </button>
+                )}
               </div>
 
               {editingSalary ? (
@@ -802,7 +836,37 @@ export function Profile() {
           </motion.div>
         )}
 
-        {activeTab === 'badges' && (
+        {!isHydrating && activeTab === 'courses' && (
+          <motion.div key="courses" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="section-pad mb-6">
+            <ProfileCoursesTab />
+          </motion.div>
+        )}
+
+        {!isHydrating && activeTab === 'certificates' && (
+          <motion.div key="certificates" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="section-pad mb-6">
+            <ProfileCertificatesTab />
+          </motion.div>
+        )}
+
+        {!isHydrating && activeTab === 'savedJobs' && (
+          <motion.div key="savedJobs" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="section-pad mb-6">
+            <ProfileSavedJobsTab />
+          </motion.div>
+        )}
+
+        {!isHydrating && activeTab === 'appliedJobs' && (
+          <motion.div key="appliedJobs" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="section-pad mb-6">
+            <ProfileAppliedJobsTab />
+          </motion.div>
+        )}
+
+        {!isHydrating && activeTab === 'resumes' && (
+          <motion.div key="resumes" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="section-pad mb-6">
+            <ProfileResumesTab />
+          </motion.div>
+        )}
+
+        {!isHydrating && activeTab === 'badges' && (
           <motion.div key="badges" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
             className="section-pad mb-6">
             {/* Earned */}
@@ -873,7 +937,7 @@ export function Profile() {
           </motion.div>
         )}
 
-        {activeTab === 'skills' && (
+        {!isHydrating && activeTab === 'skills' && (
           <motion.div key="skills" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}
             className="section-pad mb-6">
             <div className="glass-card rounded-3xl p-5">

@@ -4,11 +4,14 @@
  */
 export function getApiBaseUrl(): string {
   const raw = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE_URL?.trim()) || '';
-  return raw ? raw.replace(/\/$/, '') : '';
+  if (raw) return raw.replace(/\/$/, '');
+  if (typeof window !== 'undefined') return '/api';
+  const origin = process.env.NEXTAUTH_URL?.trim().replace(/\/$/, '');
+  return origin ? `${origin}/api` : '/api';
 }
 
-/** Default: mock on unless explicitly set to `'false'`. */
+/** Mock only when explicitly enabled (Next.js app uses real same-origin API by default). */
 export function isMockApiEnabled(): boolean {
-  if (typeof process === 'undefined') return true;
-  return process.env.NEXT_PUBLIC_USE_MOCK_API !== 'false';
+  if (typeof process === 'undefined') return false;
+  return process.env.NEXT_PUBLIC_USE_MOCK_API === 'true';
 }

@@ -109,11 +109,13 @@ export const resumeParseFn = inngest.createFunction(
       logger.info('resume.parse phase', { resumeId, phase: 'persist_complete' });
     });
 
+    await step.run('generate-insights', async () => {
+      const { generateUserInsights } = await import('@/server/services/user-insights.service');
+      await generateUserInsights(resume.userId);
+    });
+
     await step.run('enqueue-followups', () =>
-      inngest.send([
-        { name: 'app/recommendations.refresh', data: { userId: resume.userId } },
-        { name: 'app/roadmap.generate', data: { userId: resume.userId } },
-      ]),
+      inngest.send([{ name: 'app/recommendations.refresh', data: { userId: resume.userId } }]),
     );
 
     return { ok: true, resumeId };

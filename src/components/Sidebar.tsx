@@ -2,18 +2,11 @@
 
 import { useRouter, usePathname } from 'next/navigation';
 import { motion } from 'motion/react';
-import { Home, Map, BookOpen, Briefcase, User, Zap, Moon, Sun, Monitor } from 'lucide-react';
+import { Zap, Moon, Sun, Monitor } from 'lucide-react';
 import { useGame } from './GameContext';
 import { useTheme } from './ThemeContext';
 import { BrandLogo } from './BrandLogo';
-
-const navItems = [
-  { path: '/app/dashboard', icon: Home, label: 'Home' },
-  { path: '/app/roadmap', icon: Map, label: 'Roadmap' },
-  { path: '/app/courses', icon: BookOpen, label: 'Courses' },
-  { path: '/app/jobs', icon: Briefcase, label: 'Jobs' },
-  { path: '/app/profile', icon: User, label: 'Profile' },
-];
+import { appNavItems } from '@/lib/navigation/app-nav';
 
 export function Sidebar() {
   const router = useRouter();
@@ -34,13 +27,15 @@ export function Sidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 px-3 py-4 space-y-0.5" aria-label="Primary">
-        {navItems.map(({ path, icon: Icon, label }) => {
+        {appNavItems.map(({ path, icon: Icon, label }) => {
           const isActive = pathname === path || pathname.startsWith(`${path}/`);
           return (
             <button
               key={path}
               type="button"
               onClick={() => router.push(path)}
+              onMouseEnter={() => router.prefetch(path)}
+              onFocus={() => router.prefetch(path)}
               aria-current={isActive ? 'page' : undefined}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--cp-radius-md)] transition-colors duration-150 relative group"
               style={{

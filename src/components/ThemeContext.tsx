@@ -77,29 +77,24 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Sync from server after user is authenticated. We do a lightweight GET
-  // to /api/v1/me only once, so this provider stays decoupled from GameContext.
+  // Sync theme from GameContext after auth hydrates (avoids duplicate /api/v1/me).
   useEffect(() => {
-    if (serverSynced.current) return;
-    serverSynced.current = true;
-
-    fetch('/api/v1/me', { credentials: 'include' })
-      .then(r => (r.ok ? r.json() : null))
-      .then((data: { profile?: { themePreference?: string } } | null) => {
-        const serverPref = data?.profile?.themePreference as ThemeMode | undefined;
-        if (!serverPref || !(['dark', 'light', 'system'] as const).includes(serverPref)) return;
-
-        // Server wins only if user hasn't made an explicit local choice this session
-        const local = localStorage.getItem(STORAGE_KEY);
-        if (!local) {
-          const resolved = resolveMode(serverPref);
-          setThemeState(serverPref);
-          setResolvedTheme(resolved);
-          applyThemeToDom(resolved);
-          localStorage.setItem(STORAGE_KEY, serverPref);
-        }
-      })
-      .catch(() => undefined);
+    const onProfile = (e: Event) => {
+      const detail = (e as CustomEvent<{ themePreference?: ThemeMode }>).detail;
+      const serverPref = detail?.themePreference;
+      if (!serverPref || !(['dark', 'light', 'system'] as const).includes(serverPref)) return;
+      const local = localStorage.getItem(STORAGE_KEY);
+      if (!local) {
+        const resolved = resolveMode(serverPref);
+        setThemeState(serverPref);
+        setResolvedTheme(resolved);
+        applyThemeToDom(resolved);
+        localStorage.setItem(STORAGE_KEY, serverPref);
+      }
+      serverSynced.current = true;
+    };
+    window.addEventListener('cp-profile-loaded', onProfile);
+    return () => window.removeEventListener('cp-profile-loaded', onProfile);
   }, []);
 
   // React to OS-level changes when mode is 'system'

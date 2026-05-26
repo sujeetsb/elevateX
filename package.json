@@ -15,6 +15,7 @@
     "db:push": "dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- prisma db push",
     "db:migrate": "dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- prisma migrate dev",
     "db:seed": "dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- tsx prisma/seed.ts",
+    "db:seed-admin": "dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- tsx scripts/seed-admin.ts",
     "db:studio": "dotenv -e prisma/.env -e .env --ignore-missing -e .env.local --ignore-missing -- prisma studio",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest",
     "test": "vitest run"

@@ -110,8 +110,28 @@ function applyBadgeCriteria(args: {
 export async function awardGamificationXp(args: {
   userId: string;
   amount: number;
-}): Promise<{ xp: number; streak: number; badges: Badge[] }> {
-  const { userId, amount } = args;
+  /** Unique key for idempotent XP (e.g. lesson:abc:2026-05-22). Skips XP if already awarded. */
+  actionKey?: string;
+  actionType?: string;
+}): Promise<{ xp: number; streak: number; badges: Badge[]; awarded: boolean }> {
+  const { userId, amount, actionKey, actionType = 'XP' } = args;
+
+  if (actionKey) {
+    const dup = await prisma.gamificationEvent.findUnique({
+      where: { userId_actionKey: { userId, actionKey } },
+    });
+    if (dup) {
+      const snap = parseSnapshot(
+        (await prisma.userAnalytics.findUnique({ where: { userId }, select: { snapshot: true } }))?.snapshot,
+      );
+      return {
+        xp: snap.xp,
+        streak: snap.streak,
+        badges: buildBadgesFromSnapshot({ snap }),
+        awarded: false,
+      };
+    }
+  }
 
   const now = new Date();
   const today = isoDay.today(now);
@@ -149,23 +169,41 @@ export async function awardGamificationXp(args: {
 
   const { nextSnap } = applyBadgeCriteria({ snap: nextSnapBase, atsScore, nowIso });
 
-  await prisma.userAnalytics.upsert({
-    where: { userId },
-    create: {
-      userId,
-      lastActiveAt: now,
-      snapshot: nextSnap as Prisma.InputJsonValue,
-    },
-    update: {
-      snapshot: nextSnap as Prisma.InputJsonValue,
-      lastActiveAt: now,
-    },
+  await prisma.$transaction(async tx => {
+    await tx.userAnalytics.upsert({
+      where: { userId },
+      create: {
+        userId,
+        lastActiveAt: now,
+        snapshot: nextSnap as Prisma.InputJsonValue,
+      },
+      update: {
+        snapshot: nextSnap as Prisma.InputJsonValue,
+        lastActiveAt: now,
+      },
+    });
+
+    if (actionKey) {
+      await tx.gamificationEvent.create({
+        data: {
+          userId,
+          actionKey,
+          actionType,
+          xpAmount: amount,
+        },
+      });
+    }
   });
 
   // Invalidate cached user hydration.
   void cacheService.invalidateUser(userId);
 
-  return { xp: nextSnap.xp, streak: nextSnap.streak, badges: buildBadgesFromSnapshot({ snap: nextSnap }) };
+  return {
+    xp: nextSnap.xp,
+    streak: nextSnap.streak,
+    badges: buildBadgesFromSnapshot({ snap: nextSnap }),
+    awarded: true,
+  };
 }
 
 const DAILY_BONUS_XP = 25;

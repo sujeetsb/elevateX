@@ -3,11 +3,17 @@ import { z } from 'zod';
 import { prisma } from '@/server/db/prisma';
 import { getSession } from '@/server/http/get-session';
 import { invalidateUserProfileCache } from '@/server/cache/invalidate-user-profile';
+import {
+  bumpProfileVersion,
+  profilePatchInvalidatesInsights,
+} from '@/server/services/profile-version.service';
 import { handleApiError } from '@/server/errors/handler';
 import { unauthorized } from '@/server/errors/http-error';
 import { batchLinkUserSkills, withTransactionRetry } from '@/server/db/batch-user-skills';
 import { prismaInteractiveTx } from '@/server/db/prisma';
 import { logger } from '@/server/logger';
+import { ActivityVerb } from '@prisma/client';
+import { awardGamificationXp } from '@/server/gamification/gamification.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -97,9 +103,28 @@ export async function PATCH(req: Request) {
       }
     }
 
+    let finalProfile = profile;
+
+    if (profilePatchInvalidatesInsights(profileFields, Boolean(skills?.length))) {
+      await bumpProfileVersion(session.user.id);
+      finalProfile =
+        (await prisma.profile.findUnique({ where: { userId: session.user.id } })) ?? profile;
+    }
+
     await invalidateUserProfileCache(session.user.id);
 
-    return NextResponse.json({ ok: true, data: profile });
+    const today = new Date().toISOString().slice(0, 10);
+    await awardGamificationXp({
+      userId: session.user.id,
+      amount: 10,
+      actionKey: `profile-update:${today}`,
+      actionType: 'PROFILE_UPDATE',
+    });
+    await prisma.activityLog.create({
+      data: { userId: session.user.id, verb: ActivityVerb.PROFILE_UPDATE, subject: 'profile' },
+    });
+
+    return NextResponse.json({ ok: true, data: finalProfile });
   } catch (e) {
     return handleApiError(e);
   }

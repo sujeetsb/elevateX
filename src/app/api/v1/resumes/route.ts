@@ -3,12 +3,14 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/server/db/prisma';
 import { inngest } from '@/server/inngest/client';
+import { awardGamificationXp } from '@/server/gamification/gamification.service';
 import { getSession } from '@/server/http/get-session';
 import { cacheService } from '@/server/cache/cache-service';
 import { handleApiError } from '@/server/errors/handler';
 import { unauthorized, badRequest } from '@/server/errors/http-error';
 import { extractResumeText } from '@/server/resume/extract-text';
 import { fetchResumeBytesFromUrl, validateUpload } from '@/lib/storage/provider';
+import { validateResumeUpload } from '@/lib/resume/validate-upload';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
 
 export const dynamic = 'force-dynamic';
@@ -42,26 +44,40 @@ async function bodyFromUploadThing(asset: ReturnType<typeof validateUpload>): Pr
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const session = await getSession();
     if (!session?.user?.id) throw unauthorized();
 
+    const { searchParams } = new URL(req.url);
+    const metaOnly = searchParams.get('meta') === '1';
+
     const list = await prisma.resume.findMany({
       where: { userId: session.user.id, deletedAt: null },
       orderBy: { updatedAt: 'desc' },
-      select: {
-        id: true,
-        title: true,
-        parseStatus: true,
-        parsedJson: true,   // required by ATSOptimizer auto-load
-        atsScore: true,
-        parseVersion: true,
-        contentHash: true,
-        lastParsedAt: true,
-        updatedAt: true,
-        createdAt: true,
-      },
+      select: metaOnly
+        ? {
+            id: true,
+            title: true,
+            parseStatus: true,
+            atsScore: true,
+            parseVersion: true,
+            lastParsedAt: true,
+            updatedAt: true,
+            createdAt: true,
+          }
+        : {
+            id: true,
+            title: true,
+            parseStatus: true,
+            parsedJson: true,
+            atsScore: true,
+            parseVersion: true,
+            contentHash: true,
+            lastParsedAt: true,
+            updatedAt: true,
+            createdAt: true,
+          },
     });
 
     return NextResponse.json({ ok: true, data: list });
@@ -92,6 +108,8 @@ export async function POST(req: Request) {
 
     if (json && typeof json === 'object' && 'fileUrl' in json && json.fileUrl) {
       const asset = validateUpload(json);
+      const fileCheck = validateResumeUpload(asset.fileName, asset.mimeType);
+      if (!fileCheck.ok) throw badRequest(fileCheck.message);
       if (asset.title?.trim()) title = asset.title.trim().slice(0, 120);
       const extracted = await bodyFromUploadThing(asset);
       rawText = extracted.rawText;
@@ -130,6 +148,25 @@ export async function POST(req: Request) {
           status: duplicate.parseStatus,
           duplicate: true,
           skippedParse: true,
+          resumeParsed: true,
+          profileVersion: null,
+          parsedJson: duplicate.parsedJson,
+        },
+      });
+    }
+
+    if (duplicate && (duplicate.parseStatus === 'PENDING' || duplicate.parseStatus === 'PROCESSING')) {
+      await cacheService.invalidateUser(session.user.id);
+      return NextResponse.json({
+        ok: true,
+        data: {
+          resumeId: duplicate.id,
+          status: duplicate.parseStatus,
+          duplicate: true,
+          skippedParse: true,
+          parseInFlight: true,
+          resumeParsed: false,
+          profileVersion: null,
         },
       });
     }
@@ -153,7 +190,13 @@ export async function POST(req: Request) {
       await inngest.send({ name: 'app/resume.parse', data: { resumeId: updated.id } });
       return NextResponse.json({
         ok: true,
-        data: { resumeId: updated.id, status: updated.parseStatus, duplicate: true },
+        data: {
+          resumeId: updated.id,
+          status: updated.parseStatus,
+          duplicate: true,
+          resumeParsed: false,
+          profileVersion: null,
+        },
       });
     }
 
@@ -177,7 +220,18 @@ export async function POST(req: Request) {
       data: { resumeId: resume.id },
     });
 
-    return NextResponse.json({ ok: true, data: { resumeId: resume.id, status: resume.parseStatus } }, { status: 201 });
+    const today = new Date().toISOString().slice(0, 10);
+    await awardGamificationXp({
+      userId: session.user.id,
+      amount: 30,
+      actionKey: `resume-upload:${resume.id}:${today}`,
+      actionType: 'RESUME_UPLOAD',
+    });
+
+    return NextResponse.json({
+      ok: true,
+      data: { resumeId: resume.id, status: resume.parseStatus, resumeParsed: false, profileVersion: null },
+    }, { status: 201 });
   } catch (e) {
     return handleApiError(e);
   }

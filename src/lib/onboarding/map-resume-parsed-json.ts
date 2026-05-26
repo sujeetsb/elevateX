@@ -94,6 +94,11 @@ export function mapResumeParsedJsonToOnboardingPrefill(parsed: unknown): Onboard
   const gaps = strArr(p.gaps);
   const careerGoal =
     careerObjective ||
+    (roles[0] && expTitle
+      ? `Grow from ${expTitle} toward ${roles[0]} over the next 2–3 years`
+      : roles[0]
+        ? `Advance my career toward ${roles[0]}`
+        : undefined) ||
     tips.slice(0, 3).join('. ') ||
     gaps.slice(0, 3).join('. ') ||
     (analyzer && Array.isArray(analyzer.needs_improvement)
@@ -149,7 +154,7 @@ export function mapResumeParsedJsonToOnboardingPrefill(parsed: unknown): Onboard
     email,
     linkedIn,
     // currentRole = what the candidate currently does (from experience), NOT from suggested future roles
-    currentRole: expTitle || undefined,
+    currentRole: expTitle || headline || undefined,
     // targetRole = where the candidate wants to go (from AI-suggested roles), NOT from current experience
     targetRole: roles[0] || undefined,
     experience,

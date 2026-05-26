@@ -8,6 +8,7 @@ import {
   RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, LineChart, Line, CartesianGrid,
 } from 'recharts';
 import { useGame } from '../components/GameContext';
+import { useWeeklyStudyHours } from '@/lib/hooks/use-weekly-study-hours';
 
 const xpGrowthData = [
   { week: 'W1', xp: 450, target: 600 }, { week: 'W2', xp: 820, target: 1200 },
@@ -23,11 +24,6 @@ const skillGrowthData = [
   { month: 'Feb', react: 84, ts: 72, node: 57, css: 84 },
   { month: 'Mar', react: 87, ts: 74, node: 59, css: 85 },
   { month: 'Apr', react: 88, ts: 75, node: 60, css: 85 },
-];
-
-const weeklyHoursData = [
-  { day: 'Mon', hours: 1.5 }, { day: 'Tue', hours: 3.2 }, { day: 'Wed', hours: 2.0 },
-  { day: 'Thu', hours: 4.1 }, { day: 'Fri', hours: 2.5 }, { day: 'Sat', hours: 5.0 }, { day: 'Sun', hours: 3.5 },
 ];
 
 const radarData = [
@@ -56,6 +52,10 @@ const tooltipStyle = {
 export function Analytics() {
   const router = useRouter();
   const { xp, level, levelName, streak, atsScore, profileCompletion } = useGame();
+  const {
+    data: weeklyHours,
+    isLoading: weeklyHoursLoading,
+  } = useWeeklyStudyHours();
 
   const stats = [
     { label: 'Total XP', value: xp.toLocaleString(), icon: <Zap size={16} color="#f59e0b" />, color: '#f59e0b', change: '+24%' },
@@ -202,16 +202,23 @@ export function Analytics() {
         <div className="glass-card rounded-3xl p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Weekly Study Hours</h3>
-            <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>Avg: 3.1 hrs/day</span>
+            <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>
+              Avg: {weeklyHoursLoading ? '…' : `${weeklyHours?.averageHoursPerDay ?? 0} hrs/day`}
+            </span>
           </div>
           <ResponsiveContainer width="100%" height={120}>
-            <BarChart data={weeklyHoursData} barSize={24}>
+            <BarChart data={weeklyHours?.days ?? []} barSize={24}>
               <XAxis dataKey="day" tick={{ fill: 'var(--cp-text-faint)', fontSize: 10 }} axisLine={false} tickLine={false} />
               <Tooltip {...tooltipStyle} formatter={(v: number) => [`${v} hrs`, 'Study time']} />
               <Bar dataKey="hours" fill="#7c3aed" radius={[6, 6, 0, 0]}
                 style={{ filter: 'drop-shadow(0 0 6px rgba(124,58,237,0.4))' }} />
             </BarChart>
           </ResponsiveContainer>
+          <div style={{ color: 'var(--cp-text-faint)', fontSize: '0.72rem', marginTop: '8px' }}>
+            {weeklyHours?.targetWeeklyHours != null
+              ? `Goal: ${weeklyHours.targetWeeklyHours} hrs/week · Actual: ${weeklyHours.weeklyStudyHours} hrs/week`
+              : `Actual this week: ${weeklyHours?.weeklyStudyHours ?? 0} hrs`}
+          </div>
         </div>
       </div>
 

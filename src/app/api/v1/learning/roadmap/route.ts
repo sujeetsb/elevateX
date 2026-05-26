@@ -57,7 +57,7 @@ export async function GET() {
     );
 
     const progressRows = await prisma.learningProgress.findMany({
-      where: { userId: session.user.id },
+      where: { userId: session.user.id, roadmapId: roadmap.id },
       select: {
         roadmapId: true,
         resourceId: true,

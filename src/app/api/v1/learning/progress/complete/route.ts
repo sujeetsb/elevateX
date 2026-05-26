@@ -9,6 +9,7 @@ import { unauthorized, notFound } from '@/server/errors/http-error';
 import { cacheService } from '@/server/cache/cache-service';
 import { inngest } from '@/server/inngest/client';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
+import { awardGamificationXp } from '@/server/gamification/gamification.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -106,6 +107,9 @@ export async function POST(req: Request) {
     });
 
     await cacheService.invalidateUser(userId);
+    await awardGamificationXp({ userId, amount: 25 });
+    const { recomputeWeeklyStudyHours } = await import('@/server/services/weekly-study-hours.service');
+    await recomputeWeeklyStudyHours(userId);
     // Refresh job recommendations after learning progress changes.
     void inngest.send([{ name: 'app/recommendations.refresh', data: { userId } }]);
 

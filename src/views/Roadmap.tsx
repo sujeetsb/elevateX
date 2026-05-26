@@ -12,7 +12,7 @@ export function Roadmap() {
 
   const palette = ['#10b981', '#7c3aed', '#06b6d4', '#f59e0b', '#a78bfa'];
   const stages = courses.map((course, idx) => {
-    const lessons = course.modules.flatMap(m => m.lessons);
+    const lessons = (course.modules ?? []).flatMap(m => m.lessons ?? []);
     const skills = lessons.slice(0, 6).map(l => l.title);
     const color = palette[idx % palette.length];
     return {
@@ -28,10 +28,26 @@ export function Roadmap() {
     };
   });
 
-  const activeIndex = stages.findIndex(s => !s.completed);
-  const resolvedActiveIndex = activeIndex === -1 ? Math.max(0, stages.length - 1) : activeIndex;
-  const currentStage = stages[resolvedActiveIndex];
-  const totalProgress = stages.length ? Math.round(stages.reduce((acc, s) => acc + (s.progress ?? 0), 0) / stages.length) : 0;
+  type PlanModule = { title: string; summary?: string; lessons?: string[]; durationWeeks?: number };
+  const planModules = (roadmapPlan?.modules ?? []) as PlanModule[];
+  const insightStages = planModules.map((m, idx) => ({
+    id: `plan-mod-${idx}`,
+    title: m.title,
+    icon: '📘',
+    color: palette[idx % palette.length],
+    description: m.summary ?? '',
+    skills: m.lessons ?? [],
+    xpReward: 400,
+    progress: 0,
+    completed: false,
+  }));
+
+  const displayStages = stages.length > 0 ? stages : insightStages;
+
+  const activeIndex = displayStages.findIndex(s => !s.completed);
+  const resolvedActiveIndex = activeIndex === -1 ? Math.max(0, displayStages.length - 1) : activeIndex;
+  const currentStage = displayStages[resolvedActiveIndex];
+  const totalProgress = displayStages.length ? Math.round(displayStages.reduce((acc, s) => acc + (s.progress ?? 0), 0) / displayStages.length) : 0;
 
   // AI roadmap enrichment data
   const aiMilestones = roadmapPlan?.milestones ?? [];
@@ -53,7 +69,7 @@ export function Roadmap() {
     return nextLessons.slice(0, 3);
   })();
 
-  const hasTabs = aiMilestones.length > 0 || aiCertifications.length > 0;
+  const hasTabs = aiMilestones.length > 0 || aiCertifications.length > 0 || planModules.length > 0;
 
   return (
     <div className="app-page" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
@@ -154,7 +170,7 @@ export function Roadmap() {
           </div>
           <div className="flex justify-between mt-2">
             <span style={{ color: 'var(--cp-text-faint)', fontSize: '0.72rem' }}>
-              {stages.length ? `Phase ${resolvedActiveIndex + 1} of ${stages.length}` : 'No phases'}
+              {stages.length ? `Phase ${resolvedActiveIndex + 1} of ${displayStages.length}` : displayStages.length ? `${displayStages.length} modules` : 'No phases'}
             </span>
             <span style={{ color: '#a78bfa', fontSize: '0.72rem' }}>{totalProgress}% complete</span>
           </div>
@@ -226,12 +242,12 @@ export function Roadmap() {
             <div className="absolute left-[26px] top-10 bottom-10 w-0.5"
               style={{ background: 'linear-gradient(to bottom, #10b981, #7c3aed, rgba(255,255,255,0.08))' }} />
             <div className="space-y-4">
-              {stages.length === 0 ? (
+              {displayStages.length === 0 ? (
                 <div className="glass-card rounded-2xl p-6 text-center">
                   <p style={{ color: 'var(--cp-text-muted)' }}>No roadmap yet. Upload your resume to generate a personalized plan.</p>
                 </div>
               ) : (
-                stages.map((stage, index) => (
+                displayStages.map((stage, index) => (
                   <motion.div
                     key={stage.id}
                     initial={{ opacity: 0, x: -20 }}
