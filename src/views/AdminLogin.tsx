@@ -11,7 +11,7 @@ function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
-export function AdminLoginPage() {
+export function AdminLoginPage({ loggedOut = false }: { loggedOut?: boolean }) {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -84,6 +84,16 @@ export function AdminLoginPage() {
             ElevateX administration portal — authorized personnel only
           </p>
         </div>
+
+        {loggedOut ? (
+          <p
+            role="status"
+            className="mb-4 rounded-xl px-4 py-3 text-sm text-center"
+            style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', color: '#34d399' }}
+          >
+            Admin session ended. Sign in again to continue.
+          </p>
+        ) : null}
 
         <form onSubmit={e => void handleSubmit(e)} className="space-y-4">
           {error && (

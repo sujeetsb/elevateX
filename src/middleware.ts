@@ -36,9 +36,11 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  const justLoggedOut = req.nextUrl.searchParams.get('loggedOut') === '1';
+
   // ── Admin login (public) ───────────────────────────────────────────────────
   if (isAdminLogin) {
-    if (isAuthenticated && isSuperAdmin) return redirect(req, '/admin');
+    if (isAuthenticated && isSuperAdmin && !justLoggedOut) return redirect(req, '/admin');
     return NextResponse.next();
   }
 
@@ -63,6 +65,9 @@ export async function middleware(req: NextRequest) {
 
   // ── Public marketing: authed users ─────────────────────────────────────────
   if (PUBLIC_PATHS.has(pathname) && isAuthenticated) {
+    if (justLoggedOut && (pathname === '/sign-in' || pathname === '/sign-up')) {
+      return NextResponse.next();
+    }
     if (isSuperAdmin) return redirect(req, '/admin');
     return redirect(req, onboarded ? '/app/dashboard' : '/onboarding');
   }

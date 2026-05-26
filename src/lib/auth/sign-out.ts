@@ -21,21 +21,34 @@ async function clearClientAuthState() {
   }
 }
 
+/** Clear NextAuth session before hard redirect — must complete before navigation. */
+async function destroySession() {
+  try {
+    await nextAuthSignOut({ redirect: false });
+  } catch {
+    try {
+      await fetch('/api/auth/signout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function hardRedirect(path: string) {
+  if (typeof window !== 'undefined') {
+    window.location.replace(path);
+  }
+}
+
 /** Hard redirect prevents back-button access to cached admin pages. */
 export async function signOutAdmin() {
   await clearClientAuthState();
-  // Fire sign-out without blocking the redirect UX path.
-  void nextAuthSignOut({ redirect: false });
-  if (typeof window !== 'undefined') {
-    window.location.replace('/admin/login?loggedOut=1');
-  }
+  await destroySession();
+  hardRedirect('/admin/login?loggedOut=1');
 }
 
 export async function signOutUser() {
   await clearClientAuthState();
-  // Fire sign-out without blocking the redirect UX path.
-  void nextAuthSignOut({ redirect: false });
-  if (typeof window !== 'undefined') {
-    window.location.replace('/?loggedOut=1');
-  }
+  await destroySession();
+  hardRedirect('/sign-in?loggedOut=1');
 }

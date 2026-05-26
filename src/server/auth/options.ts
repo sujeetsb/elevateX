@@ -42,7 +42,7 @@ async function hydrateTokenFromDb(userId: string) {
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   session: { strategy: 'jwt', maxAge: 30 * 24 * 60 * 60 },
-  pages: { signIn: '/', error: '/' },
+  pages: { signIn: '/sign-in', error: '/sign-in' },
   providers: [
     ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
       ? [

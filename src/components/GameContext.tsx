@@ -366,6 +366,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (session?.user?.id) {
       try { clearOnboardingCache(session.user.id); } catch { /* ignore */ }
     }
+    mountedUserIdRef.current = null;
     setUser(initialUser);
     setIsOnboarded(false);
     setXp(0);
@@ -377,7 +378,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     setJobsLoading(false);
     setJobsError(null);
     setRoadmapPlan(null);
-    void signOutUser();
+    await signOutUser();
   }, [session?.user?.id]);
 
   const refreshFromServer = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {

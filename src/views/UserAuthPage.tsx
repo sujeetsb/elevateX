@@ -17,9 +17,10 @@ type Props = {
   mode: AuthMode;
   alternateHref: string;
   alternateLabel: string;
+  loggedOut?: boolean;
 };
 
-export function UserAuthPage({ mode, alternateHref, alternateLabel }: Props) {
+export function UserAuthPage({ mode, alternateHref, alternateLabel, loggedOut = false }: Props) {
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -127,6 +128,16 @@ export function UserAuthPage({ mode, alternateHref, alternateLabel }: Props) {
               : 'Start analyzing your resume and building your AI roadmap.'}
           </p>
         </div>
+
+        {loggedOut ? (
+          <p
+            role="status"
+            className="mb-4 rounded-xl px-4 py-3 text-sm text-center"
+            style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)', color: '#34d399' }}
+          >
+            You have been signed out successfully.
+          </p>
+        ) : null}
 
         <form onSubmit={e => void handleSubmit(e)} className="space-y-4">
           {mode === 'signup' && (
