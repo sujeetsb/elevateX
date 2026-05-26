@@ -52,8 +52,8 @@ export function CareerDialog({ open, onOpenChange, children, contentClassName, p
         }}
       >
         <div
-          className="max-h-[min(85vh,800px)] min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 pt-10 sm:pt-12"
-          style={{ color: 'var(--cp-text-primary)' }}
+          className="max-h-[min(85vh,800px)] min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-10 sm:pt-12"
+          style={{ color: 'var(--cp-text-primary)', WebkitOverflowScrolling: 'touch' }}
         >
           {children}
         </div>

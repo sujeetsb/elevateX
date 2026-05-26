@@ -18,6 +18,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer } from 'recharts';
+import { getAtsMessage } from '@/lib/ats/messaging';
 import { useGame } from '../components/GameContext';
 import { useRouter } from 'next/navigation';
 import type { AISuggestion, OptimizeMode, ResumeDocument, ResumeTemplateId, WizardStep } from '../lib/resume/types';
@@ -250,9 +251,19 @@ export function ATSOptimizer() {
           setResumeText(prev => (prev.trim() ? prev : prefill.summary!.trim()));
         }
 
-        const suggestionList = generateSuggestions(
-          buildInitialResumeFromProfile({ ...user, certifications: user.certifications.map(c => c.name) }),
-        );
+        const doc = buildInitialResumeFromProfile({
+          ...user,
+          currentRole: prefill.currentRole || user.currentRole,
+          targetRole: prefill.targetRole || user.targetRole,
+          experience: prefill.experience || user.experience,
+          skills: prefill.skills?.length ? prefill.skills : user.skills,
+          education: prefill.education || user.education,
+          bio: prefill.summary || user.bio,
+          linkedIn: prefill.linkedIn || user.linkedIn,
+          certifications: user.certifications.map(c => c.name),
+        });
+        const suggestionList = generateSuggestions(doc);
+        setResumeDoc(doc);
         setSuggestions(suggestionList);
 
         // Show ATS data without re-upload
@@ -803,11 +814,16 @@ export function ATSOptimizer() {
                 <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '4px' }}>Beat {atsScore > 72 ? '65%' : '45%'} of applicants in your field</div>
               )}
               <div className="flex justify-around mt-4 pt-4" style={{ borderTop: '1px solid var(--cp-border)' }}>
-                {[
-                  { label: 'Target', value: '85+', color: '#10b981' },
-                  { label: 'Current', value: `${atsScore}`, color: scoreColor },
-                  { label: 'Gap', value: `${Math.max(85 - atsScore, 0)}`, color: '#f59e0b' },
-                ].map(s => (
+                {(() => {
+                  const msg = getAtsMessage(atsScore);
+                  const target = msg.band === 'excellent' ? '90+' : '90';
+                  const gap = msg.band === 'excellent' ? 0 : Math.max(90 - atsScore, 0);
+                  return [
+                    { label: 'Target', value: target, color: '#10b981' },
+                    { label: 'Current', value: `${atsScore}`, color: scoreColor },
+                    { label: msg.band === 'excellent' ? 'Status' : 'Gap', value: msg.band === 'excellent' ? '✓' : `${gap}`, color: msg.band === 'excellent' ? '#10b981' : '#f59e0b' },
+                  ];
+                })().map(s => (
                   <div key={s.label}>
                     <div style={{ color: s.color, fontWeight: 700, fontSize: '1.2rem' }}>{s.value}</div>
                     <div style={{ color: 'var(--cp-text-faint)', fontSize: '0.72rem' }}>{s.label}</div>

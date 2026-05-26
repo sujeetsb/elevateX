@@ -1,65 +1,24 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { Sparkles, ChevronRight, Zap, Lock, Check, Plus, Search, X } from 'lucide-react';
 import { useGame } from '../components/GameContext';
 import { CareerDialog } from '../components/CareerDialog';
 import { DialogTitle } from '@/components/ui/dialog';
-import { isApiError, submitCourseGenerationRequest } from '@/api';
-
-const mockGeneratedCourse = {
-  id: 'gen1',
-  title: '',
-  description: 'AI-generated personalized course tailored to your goals',
-  category: 'AI Generated',
-  difficulty: 'Intermediate' as const,
-  estimatedDays: 30,
-  totalXp: 2800,
-  progress: 0,
-  thumbnail: '🤖',
-  tags: [],
-  aiGenerated: true,
-  modules: [
-    {
-      id: 'gm1', title: 'Module 1: Foundations', description: 'Core concepts',
-      locked: false, completed: false, xpReward: 300,
-      lessons: [
-        { id: 'gl1', title: 'Introduction & Setup', duration: '15 min', type: 'video' as const, completed: false },
-        { id: 'gl2', title: 'Core Concepts', duration: '25 min', type: 'reading' as const, completed: false },
-        { id: 'gl3', title: 'Knowledge Check', duration: '10 min', type: 'quiz' as const, completed: false },
-      ]
-    },
-    {
-      id: 'gm2', title: 'Module 2: Intermediate Skills', description: 'Building complexity',
-      locked: true, completed: false, xpReward: 400,
-      lessons: [
-        { id: 'gl4', title: 'Advanced Patterns', duration: '30 min', type: 'video' as const, completed: false },
-        { id: 'gl5', title: 'Hands-on Exercise', duration: '45 min', type: 'project' as const, completed: false },
-      ]
-    },
-    {
-      id: 'gm3', title: 'Module 3: Real-World Project', description: 'Apply everything',
-      locked: true, completed: false, xpReward: 600,
-      lessons: [
-        { id: 'gl6', title: 'Project Architecture', duration: '20 min', type: 'video' as const, completed: false },
-        { id: 'gl7', title: 'Build Your Project', duration: '90 min', type: 'project' as const, completed: false },
-        { id: 'gl8', title: 'Final Quiz', duration: '20 min', type: 'quiz' as const, completed: false },
-      ]
-    },
-  ],
-};
-
-const recommendedCourses = [
-  { id: 'r1', title: 'GraphQL Mastery', thumbnail: '🔗', difficulty: 'Intermediate', days: 14, xp: 1200, tags: ['GraphQL', 'API'], locked: false },
-  { id: 'r2', title: 'AWS for Frontend', thumbnail: '☁️', difficulty: 'Advanced', days: 21, xp: 1800, tags: ['AWS', 'Cloud'], locked: false },
-  { id: 'r3', title: 'Docker & CI/CD', thumbnail: '🐳', difficulty: 'Intermediate', days: 10, xp: 900, tags: ['Docker', 'DevOps'], locked: true },
-];
+import { AsyncState } from '@/components/AsyncState';
+import {
+  isApiError,
+  submitCourseGenerationRequest,
+  fetchRecommendedCourses,
+  enrollInCourse,
+  type RecommendedCourse,
+} from '@/api';
 
 export function Courses() {
   const router = useRouter();
-  const { courses, addCourse, isHydrating } = useGame();
+  const { courses, addCourse, isHydrating, refresh } = useGame();
   const [showGenerator, setShowGenerator] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState(false);
@@ -72,6 +31,25 @@ export function Courses() {
   const [learningStyle, setLearningStyle] = useState('Hands-on Projects');
   const [searchQuery, setSearchQuery] = useState('');
   const [generatorError, setGeneratorError] = useState<string | null>(null);
+  const [recommendedCourses, setRecommendedCourses] = useState<RecommendedCourse[]>([]);
+  const [recLoading, setRecLoading] = useState(true);
+  const [startingId, setStartingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void fetchRecommendedCourses()
+      .then(setRecommendedCourses)
+      .catch(() => setRecommendedCourses([]))
+      .finally(() => setRecLoading(false));
+  }, []);
+
+  const continueCourses = useMemo(
+    () => courses.filter(c => c.progress > 0 && c.progress < 100),
+    [courses],
+  );
+  const completedCourses = useMemo(
+    () => courses.filter(c => c.progress >= 100),
+    [courses],
+  );
 
   const resetGeneratorUi = () => {
     setGenerating(false);
@@ -86,33 +64,26 @@ export function Courses() {
     setGenerating(true);
     setLastGeneratedCourseId(null);
     try {
-      await submitCourseGenerationRequest({
+      const result = await submitCourseGenerationRequest({
         title: courseTitle.trim(),
         goals,
         skillLevel,
         durationDays: parseInt(duration, 10) || 30,
         learningStyle,
       });
+      if (result.course?.id) {
+        addCourse(result.course);
+        setLastGeneratedCourseId(result.course.id);
+        setGenerating(false);
+        setGenerated(true);
+      } else {
+        setGeneratorError('Course was queued but no course was returned. Try again.');
+        setGenerating(false);
+      }
     } catch (e) {
       setGeneratorError(isApiError(e) ? e.message : 'Could not reach the course service. Try again.');
       setGenerating(false);
-      return;
     }
-    window.setTimeout(() => {
-      setGenerating(false);
-      setGenerated(true);
-      const newCourseId = `gen-${Date.now()}`;
-      const newCourse = {
-        ...mockGeneratedCourse,
-        id: newCourseId,
-        title: courseTitle.trim(),
-        tags: goals.slice(0, 3),
-        difficulty: skillLevel as 'Beginner' | 'Intermediate' | 'Advanced',
-        estimatedDays: parseInt(duration, 10) || 30,
-      };
-      setLastGeneratedCourseId(newCourseId);
-      addCourse(newCourse);
-    }, 3000);
   };
 
   const addGoal = () => {
@@ -173,6 +144,31 @@ export function Courses() {
         </div>
       </div>
 
+      {/* Continue Learning */}
+      {continueCourses.length > 0 && (
+        <div className="section-pad mb-5">
+          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Continue Learning</h3>
+          <div className="space-y-3">
+            {continueCourses.map(course => (
+              <motion.button
+                key={course.id}
+                type="button"
+                onClick={() => router.push(`/app/courses/${course.id}`)}
+                className="w-full text-left glass-card rounded-2xl p-4 flex items-center gap-3"
+                whileTap={{ scale: 0.98 }}
+              >
+                <span className="text-2xl">{course.thumbnail}</span>
+                <div className="flex-1 min-w-0">
+                  <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.9rem' }}>{course.title}</div>
+                  <div style={{ color: '#a78bfa', fontSize: '0.75rem' }}>{course.progress}% complete</div>
+                </div>
+                <ChevronRight size={18} color="#475569" />
+              </motion.button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* My Courses */}
       <div className="section-pad mb-5">
         <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>
@@ -204,7 +200,16 @@ export function Courses() {
                 >
                   Clear search
                 </button>
-              ) : null}
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void refresh()}
+                  className="text-sm"
+                  style={{ color: '#a78bfa', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  Retry loading courses
+                </button>
+              )}
             </div>
           )}
           {filteredCourses.map((course, i) => (
@@ -284,7 +289,8 @@ export function Courses() {
       {/* Recommended */}
       <div className="section-pad mb-6">
         <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Recommended for You</h3>
-        <div className="space-y-3">
+        <AsyncState loading={recLoading} empty={recommendedCourses.length === 0} emptyMessage="Recommendations will appear after profile setup.">
+          <div className="space-y-3">
           {recommendedCourses.map((course, i) => (
             <motion.div
               key={course.id}
@@ -319,18 +325,58 @@ export function Courses() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => router.push(`/app/courses/${course.id}`)}
+                    disabled={startingId === course.id}
+                    onClick={() => {
+                      void (async () => {
+                        setStartingId(course.id);
+                        try {
+                          const result = await enrollInCourse({
+                            courseTitle: course.title,
+                            courseId: course.courseId ?? undefined,
+                            resourceId: course.courseId ?? undefined,
+                          });
+                          const targetId = result.courseId;
+                          if (result.course) addCourse(result.course);
+                          void refresh();
+                          router.push(`/app/courses/${targetId}`);
+                        } catch (e) {
+                          setGeneratorError(e instanceof Error ? e.message : 'Could not start course. Try again.');
+                        } finally {
+                          setStartingId(null);
+                        }
+                      })();
+                    }}
                     className="rounded-xl px-3 py-1.5 text-xs font-semibold"
                     style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa' }}
                   >
-                    Start
+                    {startingId === course.id ? 'Starting…' : 'Start Learning'}
                   </button>
                 )}
               </div>
             </motion.div>
           ))}
-        </div>
+          </div>
+        </AsyncState>
       </div>
+
+      {completedCourses.length > 0 && (
+        <div className="section-pad mb-6">
+          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Completed Courses</h3>
+          <div className="space-y-2">
+            {completedCourses.map(c => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => router.push(`/app/courses/${c.id}`)}
+                className="w-full text-left glass-card rounded-xl p-3 flex items-center gap-2"
+              >
+                <Check size={14} color="#10b981" />
+                <span style={{ color: 'var(--cp-text-primary)', fontSize: '0.85rem' }}>{c.title}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <CareerDialog
         open={showGenerator}

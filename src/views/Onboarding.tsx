@@ -11,8 +11,11 @@ import { DialogTitle } from '../components/ui/dialog';
 import { ResumeUploadButton } from '@/lib/uploadthing/components';
 import type { ResumeParseResult } from '@/types/resume-parse-result';
 import { mapResumeParsedJsonToOnboardingPrefill } from '@/lib/onboarding/map-resume-parsed-json';
+import { validateResumeUpload } from '@/lib/resume/validate-upload';
 import { STORAGE_KEYS, APP_NAME } from '@/lib/brand';
 import { BrandLogo } from '@/components/BrandLogo';
+import { useSession } from 'next-auth/react';
+import { resolveSalaryLocale } from '@/lib/salary/locale';
 
 const PARSE_STATUS_LABELS: Record<string, string> = {
   PENDING: 'Queued for analysis…',
@@ -77,6 +80,10 @@ type DraftShape = {
   industries: string[];
   resumeUploaded: boolean;
   profileSummary: string;
+  currentSalary: string;
+  salaryType: string;
+  salaryCurrency: string;
+  country: string;
 };
 
 function readDraft(): Partial<DraftShape> | null {
@@ -101,8 +108,11 @@ function writeDraft(d: DraftShape) {
 
 export function Onboarding() {
   const router = useRouter();
-  const { addXP, xp, level, levelName, isAuthenticated, isOnboarded, isHydrating, refresh } = useGame();
+  const { data: session, update: updateSession } = useSession();
+  const { addXP, xp, level, levelName, isAuthenticated, isOnboarded, isHydrating, refresh, markOnboarded, user } = useGame();
   const resumeXpGranted = useRef(false);
+  const redirectTimerRef = useRef<number | null>(null);
+  const autosaveSnapshotRef = useRef('');
 
   const [step, setStep] = useState(0);
   const [resumeUploaded, setResumeUploaded] = useState(false);
@@ -115,6 +125,11 @@ export function Onboarding() {
   const [pasteBusy, setPasteBusy] = useState(false);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [uploadRetryCount, setUploadRetryCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [resumeAnalyzed, setResumeAnalyzed] = useState(false);
+  const [activeResumeId, setActiveResumeId] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [aiPackLoading, setAiPackLoading] = useState(false);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -127,6 +142,10 @@ export function Onboarding() {
   const [industry, setIndustry] = useState('');
   const [industries, setIndustries] = useState<string[]>([]);
   const [profileSummary, setProfileSummary] = useState('');
+  const [currentSalary, setCurrentSalary] = useState('');
+  const [salaryType, setSalaryType] = useState('Annual');
+  const [salaryCurrency, setSalaryCurrency] = useState('USD');
+  const [country, setCountry] = useState('');
   const [stepError, setStepError] = useState<string | null>(null);
 
   const [showCelebration, setShowCelebration] = useState(false);
@@ -134,10 +153,9 @@ export function Onboarding() {
   const [submittingProfile, setSubmittingProfile] = useState(false);
 
   const [aiGoalSuggestions, setAiGoalSuggestions] = useState<string[]>([]);
-  const [aiGoalLoading, setAiGoalLoading] = useState(false);
   const [aiGoalError, setAiGoalError] = useState<string | null>(null);
   const [aiRoleSuggestions, setAiRoleSuggestions] = useState<string[]>([]);
-  const [aiRoleLoading, setAiRoleLoading] = useState(false);
+  const [aiCourseSuggestions, setAiCourseSuggestions] = useState<string[]>([]);
 
   useEffect(() => {
     const d = readDraft();
@@ -155,6 +173,10 @@ export function Onboarding() {
       if (Array.isArray(d.industries)) setIndustries(d.industries);
       if (typeof d.resumeUploaded === 'boolean') setResumeUploaded(d.resumeUploaded);
       if (typeof d.profileSummary === 'string') setProfileSummary(d.profileSummary);
+      if (typeof d.currentSalary === 'string') setCurrentSalary(d.currentSalary);
+      if (typeof d.salaryType === 'string') setSalaryType(d.salaryType);
+      if (typeof d.salaryCurrency === 'string') setSalaryCurrency(d.salaryCurrency);
+      if (typeof d.country === 'string') setCountry(d.country);
     }
     setDraftHydrated(true);
   }, []);
@@ -167,10 +189,18 @@ export function Onboarding() {
   }, [isHydrating, isAuthenticated, router]);
 
   useEffect(() => {
-    if (isAuthenticated && isOnboarded) {
+    if (isAuthenticated && isOnboarded && !showCelebration) {
       router.replace('/app/dashboard');
     }
-  }, [isAuthenticated, isOnboarded, router]);
+  }, [isAuthenticated, isOnboarded, router, showCelebration]);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) {
+        window.clearTimeout(redirectTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!draftHydrated) return;
@@ -189,6 +219,10 @@ export function Onboarding() {
         industries,
         resumeUploaded,
         profileSummary,
+        currentSalary,
+        salaryType,
+        salaryCurrency,
+        country,
       });
     }, 450);
     return () => window.clearTimeout(timer);
@@ -207,7 +241,37 @@ export function Onboarding() {
     industries,
     resumeUploaded,
     profileSummary,
+    currentSalary,
+    salaryType,
+    salaryCurrency,
+    country,
   ]);
+
+  useEffect(() => {
+    if (!draftHydrated) return;
+    setCountry(prev => prev.trim() || user.country || '');
+    setSalaryCurrency(prev => prev.trim() || user.salaryCurrency || 'USD');
+    setSalaryType(prev => prev.trim() || user.salaryFrequency || 'Annual');
+    setCurrentSalary(prev => prev.trim() || user.currentSalary || '');
+  }, [draftHydrated, user.country, user.salaryCurrency, user.salaryFrequency, user.currentSalary]);
+
+  useEffect(() => {
+    if (!country.trim()) return;
+    const inferred = resolveSalaryLocale({ country, salaryCurrency: null }).currency;
+    setSalaryCurrency(inferred);
+  }, [country]);
+
+  const salaryLocale = resolveSalaryLocale({
+    country,
+    salaryCurrency,
+    salaryFrequency: salaryType,
+  });
+
+  useEffect(() => {
+    if (!salaryLocale.showMonthlyAndYearly && salaryType !== 'Annual') {
+      setSalaryType('Annual');
+    }
+  }, [salaryLocale.showMonthlyAndYearly, salaryType]);
 
   const mergeParsed = useCallback((parsed: ResumeParseResult) => {
     // Quick-parse result: only fill fields that are currently empty (user may have typed already)
@@ -255,67 +319,127 @@ export function Onboarding() {
     if (pre.careerGoal) setCareerGoal(pre.careerGoal);
   }, []);
 
+  const loadCachedInsights = useCallback(async (waitForReady = false) => {
+    const maxAttempts = waitForReady ? 8 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const res = await fetch('/api/v1/insights', { credentials: 'include' });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(readApiError(json, 'Could not load career suggestions.'));
+      }
+      const insights = json?.data as Record<string, unknown> | null;
+      if (insights) {
+        const targetRoles = Array.isArray(insights.targetRoles) ? insights.targetRoles.map(String) : [];
+        const careerGoals = Array.isArray(insights.careerGoals) ? insights.careerGoals.map(String) : [];
+        const skillsGap = Array.isArray(insights.skillsGap)
+          ? (insights.skillsGap as Array<Record<string, unknown>>).map(x => String(x.skill ?? '')).filter(Boolean)
+          : [];
+        const recommendedCourses = Array.isArray(insights.recommendedCourses)
+          ? (insights.recommendedCourses as Array<Record<string, unknown>>).map(x => String(x.title ?? '')).filter(Boolean)
+          : [];
+        const pathStages = Array.isArray((insights.careerPath as Record<string, unknown> | undefined)?.stages)
+          ? (((insights.careerPath as Record<string, unknown>).stages as Array<Record<string, unknown>>).map(x => String(x.title ?? '')).filter(Boolean))
+          : [];
+
+        if (targetRoles[0]) setTargetRole(prev => prev.trim() || targetRoles[0]);
+        if (careerGoals[0]) setCareerGoal(prev => prev.trim() || careerGoals[0]);
+        setAiRoleSuggestions(Array.from(new Set([...targetRoles, ...pathStages])).slice(0, 6));
+        setAiGoalSuggestions(careerGoals.slice(0, 5));
+        setAiCourseSuggestions(recommendedCourses.slice(0, 4));
+
+        if (skillsGap.length) {
+          setSkills(prev => {
+            const merged = [...prev];
+            for (const s of skillsGap) {
+              if (!merged.some(x => x.toLowerCase() === s.toLowerCase())) merged.push(s);
+            }
+            return merged;
+          });
+        }
+        return true;
+      }
+      if (waitForReady) await new Promise(r => setTimeout(r, 1500));
+    }
+    return false;
+  }, []);
+
   const grantResumeXpOnce = () => {
     if (resumeXpGranted.current) return;
     resumeXpGranted.current = true;
     addXP(100);
   };
 
-  const pollResumeStatus = useCallback(async (resumeId: string) => {
+  const pollResumeStatus = useCallback(async (resumeId: string): Promise<boolean> => {
     setResumeParseStatus('PROCESSING');
+    setUploadProgress(40);
     const startedAt = Date.now();
-    while (Date.now() - startedAt < 90_000) {
+    while (Date.now() - startedAt < 120_000) {
       try {
         const sRes = await fetch(`/api/v1/resumes/${resumeId}`, { credentials: 'include' });
         const sJson = await sRes.json().catch(() => ({}));
         const status = sJson?.data?.parseStatus as string | undefined;
         if (status) setResumeParseStatus(status);
+        if (status === 'PROCESSING' || status === 'PENDING') setUploadProgress(60);
         if (status === 'COMPLETE') {
+          setUploadProgress(100);
+          setResumeAnalyzed(true);
           const conf = sJson?.data?.confidence as Record<string, unknown> | undefined;
           const overall = typeof conf?.overall === 'number' ? conf.overall : null;
           if (overall != null) setResumeConfidence(overall);
           applyPrefillFromParsedJson(sJson?.data?.parsedJson);
-          await refresh();
-          return;
+          try {
+            await loadCachedInsights(true);
+          } catch {
+            // non-fatal
+          }
+          await refresh({ silent: true, force: true });
+          return true;
         }
         if (status === 'FAILED') {
+          setUploadProgress(0);
           setResumeError((sJson?.data?.parseError as string | undefined) ?? 'Resume parsing failed.');
-          return;
+          return false;
         }
       } catch {
         // keep polling until timeout
       }
       await new Promise(r => setTimeout(r, 2000));
     }
-  }, [applyPrefillFromParsedJson, refresh]);
+    return false;
+  }, [applyPrefillFromParsedJson, loadCachedInsights, refresh]);
+
+  const clearUploadedResume = () => {
+    setResumeUploaded(false);
+    setResumeAnalyzed(false);
+    setActiveResumeId(null);
+    setUploadedFileName(null);
+    setUploadProgress(0);
+    setResumeParseStatus(null);
+    setResumeConfidence(null);
+    setResumeError(null);
+  };
 
   const runResumePipelineFromUt = async (
     files: { ufsUrl: string; key: string; name: string; type: string }[],
   ) => {
     const file = files[0];
     if (!file?.ufsUrl?.trim() || !file.key) return;
+
+    const validation = validateResumeUpload(file.name, file.type);
+    if (!validation.ok) {
+      setResumeError(validation.message);
+      toast.error('Wrong file uploaded', { description: validation.message });
+      return;
+    }
+
     setResumeError(null);
     setResumeParsing(true);
     setResumeConfidence(null);
     setResumeParseStatus(null);
+    setResumeAnalyzed(false);
+    setUploadProgress(20);
 
     try {
-      const parseRes = await fetch('/api/v1/onboarding/resume/parse', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileUrl: file.ufsUrl,
-          fileName: file.name,
-          mimeType: file.type || undefined,
-        }),
-        credentials: 'include',
-      });
-      const parseJson = await parseRes.json().catch(() => ({}));
-      if (!parseRes.ok) {
-        throw new Error(readApiError(parseJson, 'Could not parse that file.'));
-      }
-      mergeParsed(parseJson.data as ResumeParseResult);
-
       const uploadRes = await fetch('/api/v1/resumes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -332,15 +456,44 @@ export function Onboarding() {
         throw new Error(readApiError(uploadJson, 'Could not save resume.'));
       }
 
+      if (uploadJson?.data?.skippedParse && uploadJson?.data?.parsedJson) {
+        applyPrefillFromParsedJson(uploadJson.data.parsedJson);
+      } else {
+        const quickRes = await fetch('/api/v1/onboarding/resume/parse', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileUrl: file.ufsUrl,
+            fileName: file.name,
+            mimeType: file.type || undefined,
+          }),
+          credentials: 'include',
+        });
+        const quickJson = await quickRes.json().catch(() => ({}));
+        if (quickRes.ok && quickJson?.data) {
+          mergeParsed(quickJson.data as ResumeParseResult);
+        }
+      }
+
+      setUploadProgress(45);
       setResumeUploaded(true);
-      setStep(1);
+      setUploadedFileName(file.name);
       grantResumeXpOnce();
 
       const resumeId = uploadJson?.data?.resumeId as string | undefined;
-      if (resumeId) void pollResumeStatus(resumeId);
+      if (resumeId) {
+        setActiveResumeId(resumeId);
+        const ok = await pollResumeStatus(resumeId);
+        if (!ok && !resumeAnalyzed) {
+          toast.info('Analysis is taking longer than expected. You can continue manually.');
+        }
+      }
+
+      setStep(1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not read that file. Try PDF, DOCX, or TXT.';
       setResumeError(msg);
+      setUploadProgress(0);
       toast.error('Resume upload failed.', { description: msg });
       setUploadRetryCount(prev => prev + 1);
     } finally {
@@ -366,18 +519,7 @@ export function Onboarding() {
     setResumeConfidence(null);
 
     try {
-      const parseRes = await fetch('/api/v1/onboarding/resume/parse-text', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: trimmed }),
-        credentials: 'include',
-      });
-      const parseJson = await parseRes.json().catch(() => ({}));
-      if (!parseRes.ok) {
-        throw new Error(readApiError(parseJson, 'Could not parse pasted text.'));
-      }
-      mergeParsed(parseJson.data as ResumeParseResult);
-
+      setUploadProgress(20);
       const uploadRes = await fetch('/api/v1/resumes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -388,15 +530,33 @@ export function Onboarding() {
       if (!uploadRes.ok) {
         throw new Error(readApiError(uploadJson, 'Could not save resume.'));
       }
+      if (uploadJson?.data?.skippedParse && uploadJson?.data?.parsedJson) {
+        applyPrefillFromParsedJson(uploadJson.data.parsedJson);
+      } else {
+        const parseRes = await fetch('/api/v1/onboarding/resume/parse-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: trimmed }),
+          credentials: 'include',
+        });
+        const parseJson = await parseRes.json().catch(() => ({}));
+        if (parseRes.ok && parseJson?.data) {
+          mergeParsed(parseJson.data as ResumeParseResult);
+        }
+      }
 
       setResumeUploaded(true);
+      setUploadedFileName('Pasted resume');
       grantResumeXpOnce();
       setShowPasteDialog(false);
       setPasteText('');
-      setStep(1);
 
       const resumeId = uploadJson?.data?.resumeId as string | undefined;
-      if (resumeId) void pollResumeStatus(resumeId);
+      if (resumeId) {
+        setActiveResumeId(resumeId);
+        await pollResumeStatus(resumeId);
+      }
+      setStep(1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not parse pasted text.';
       setPasteError(msg);
@@ -448,38 +608,88 @@ export function Onboarding() {
         setStepError('Write a short career goal.');
         return false;
       }
+      if (currentSalary.trim()) {
+        const n = Number(currentSalary.replace(/[^0-9.]/g, ''));
+        if (!Number.isFinite(n) || n <= 0) {
+          setStepError('Enter a valid current salary or leave it blank.');
+          return false;
+        }
+      }
     }
     return true;
   };
 
-  const generateAiGoals = async () => {
-    setAiGoalLoading(true);
+  const generateAiCareerPackage = async () => {
+    setAiPackLoading(true);
     setAiGoalError(null);
     try {
-      const res = await fetch('/api/v1/ai/career-goals/generate', { method: 'POST', credentials: 'include' });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.error?.message ?? 'Failed');
-      setAiGoalSuggestions(json.data?.suggestions ?? []);
+      const loaded = await loadCachedInsights(true);
+      if (!loaded) {
+        throw new Error('Insights are still preparing. Please try again in a few seconds.');
+      }
+      toast.success('Loaded suggestions from your parsed resume insights');
     } catch {
-      setAiGoalError('Could not generate suggestions. Try again.');
+      setAiGoalError('Could not load suggestions yet. Please retry shortly.');
     } finally {
-      setAiGoalLoading(false);
+      setAiPackLoading(false);
     }
   };
 
-  const generateAiRoles = async () => {
-    setAiRoleLoading(true);
-    try {
-      const res = await fetch('/api/v1/ai/target-roles/suggest', { method: 'POST', credentials: 'include' });
-      const json = await res.json();
-      if (!res.ok) throw new Error();
-      setAiRoleSuggestions(json.data?.roles ?? []);
-    } catch {
-      // non-fatal
-    } finally {
-      setAiRoleLoading(false);
-    }
+  const waitForResumeAnalysis = async (): Promise<boolean> => {
+    if (!resumeUploaded || resumeAnalyzed) return true;
+    if (!activeResumeId) return true;
+    return pollResumeStatus(activeResumeId);
   };
+
+  useEffect(() => {
+    if (!draftHydrated || !isAuthenticated || submittingProfile) return;
+    if (step < 2) return;
+
+    const payload = {
+      skills: skills.length > 0 ? skills : undefined,
+      careerGoal: careerGoal.trim() || undefined,
+      targetRole: targetRole.trim() || undefined,
+      preferredIndustry: industries[0]?.trim() || industry.trim() || undefined,
+      preferredIndustries: industries.length > 0 ? industries : undefined,
+      currentSalary: currentSalary.trim() || undefined,
+      salaryCurrency: salaryCurrency || undefined,
+      salaryFrequency: salaryType || undefined,
+      country: country.trim() || undefined,
+    };
+    const snapshot = JSON.stringify(payload);
+    if (snapshot === autosaveSnapshotRef.current) return;
+
+    const t = window.setTimeout(() => {
+      void fetch('/api/v1/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: snapshot,
+        credentials: 'include',
+      }).then(async res => {
+        if (!res.ok) return;
+        autosaveSnapshotRef.current = snapshot;
+        // Autosave should not force a full app re-hydration; local onboarding state is source of truth.
+      }).catch(() => {
+        // silent autosave retry on next change
+      });
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [
+    draftHydrated,
+    isAuthenticated,
+    submittingProfile,
+    step,
+    skills,
+    careerGoal,
+    targetRole,
+    industries,
+    industry,
+    currentSalary,
+    salaryCurrency,
+    salaryType,
+    country,
+    refresh,
+  ]);
 
   const handleNext = async () => {
     if (!validateStep()) return;
@@ -491,6 +701,14 @@ export function Onboarding() {
     setSubmittingProfile(true);
     setResumeError(null);
     try {
+      if (resumeUploaded && !resumeAnalyzed) {
+        setResumeParseStatus('PROCESSING');
+        const ready = await waitForResumeAnalysis();
+        if (!ready) {
+          throw new Error('Resume analysis is still in progress. Please wait or continue with manual profile.');
+        }
+      }
+
       const res = await fetch('/api/v1/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -503,6 +721,10 @@ export function Onboarding() {
           targetRole: targetRole.trim() || undefined,
           preferredIndustry: industries[0]?.trim() || industry.trim() || undefined,
           preferredIndustries: industries.length > 0 ? industries : undefined,
+          currentSalary: currentSalary.trim() || undefined,
+          salaryCurrency: salaryCurrency || undefined,
+          salaryFrequency: salaryType || undefined,
+          country: country.trim() || undefined,
           bio: profileSummary.trim() || undefined,
           onboardingComplete: true,
         }),
@@ -514,19 +736,25 @@ export function Onboarding() {
         throw new Error(readApiError(json, 'Profile update failed'));
       }
 
-      await refresh();
+      await updateSession({ onboardingComplete: true });
+      markOnboarded();
+      void refresh({ silent: true, force: true });
 
       try {
         localStorage.removeItem(DRAFT_KEY);
+        localStorage.removeItem(DRAFT_KEY_LEGACY);
+        if (session?.user?.id) {
+          localStorage.setItem(STORAGE_KEYS.onboardingCache(session.user.id), '1');
+        }
       } catch {
         // ignore
       }
 
       addXP(500);
       setShowCelebration(true);
-      window.setTimeout(() => {
-        router.push('/app/dashboard');
-      }, 1600);
+      redirectTimerRef.current = window.setTimeout(() => {
+        window.location.replace('/app/dashboard');
+      }, 900);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Profile update failed. Please try again.';
       setResumeError(msg);
@@ -721,6 +949,20 @@ export function Onboarding() {
                   Upload a resume for instant fields, paste text, or continue manually.
                 </p>
 
+                {(resumeParsing || uploadProgress > 0) && (
+                  <div className="mb-4">
+                    <div className="flex justify-between mb-1">
+                      <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>
+                        {uploadProgress < 40 ? 'Uploading resume…' : uploadProgress < 60 ? 'Parsing…' : uploadProgress < 100 ? 'AI analysis…' : 'Complete ✓'}
+                      </span>
+                      <span style={{ color: '#a78bfa', fontSize: '0.78rem', fontWeight: 600 }}>{uploadProgress}%</span>
+                    </div>
+                    <div className="rounded-full overflow-hidden" style={{ background: 'var(--cp-bg-elevated)', height: '6px' }}>
+                      <div className="xp-bar h-full rounded-full transition-all duration-500" style={{ width: `${uploadProgress}%` }} />
+                    </div>
+                  </div>
+                )}
+
                 <div
                   className={`w-full rounded-3xl p-5 mb-4 text-left transition-all ${resumeUploaded ? 'glass-card-purple' : 'glass-card'}`}
                   style={{
@@ -768,6 +1010,19 @@ export function Onboarding() {
                       )}
                       {resumeUploaded && (
                         <div style={{ color: '#f59e0b', fontSize: '0.78rem', fontWeight: 600 }}>⚡ +100 XP earned</div>
+                      )}
+                      {resumeUploaded && uploadedFileName && (
+                        <div className="mt-2 flex items-center gap-2 flex-wrap">
+                          <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>{uploadedFileName}</span>
+                          <button
+                            type="button"
+                            className="text-xs rounded-lg px-2 py-1"
+                            style={{ background: 'rgba(244,63,94,0.12)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.3)' }}
+                            onClick={clearUploadedResume}
+                          >
+                            Remove & re-upload
+                          </button>
+                        </div>
                       )}
                       {!resumeUploaded && (
                         <div className="mt-3 max-w-xs" onClick={e => e.stopPropagation()}>
@@ -971,19 +1226,19 @@ export function Onboarding() {
                   Define where you want to go
                 </p>
                 <div className="space-y-4">
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void generateAiCareerPackage()}
+                      disabled={aiPackLoading}
+                      className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs transition-all disabled:opacity-50"
+                      style={{ background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa' }}
+                    >
+                      {aiPackLoading ? '⏳ Loading…' : '✨ Load Suggestions'}
+                    </button>
+                  </div>
                   <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.8rem' }}>Target Role</label>
-                      <button
-                        type="button"
-                        onClick={() => void generateAiRoles()}
-                        disabled={aiRoleLoading}
-                        className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all disabled:opacity-50"
-                        style={{ background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa' }}
-                      >
-                        {aiRoleLoading ? '⏳ Loading…' : '✨ AI Suggest'}
-                      </button>
-                    </div>
+                    <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>Target Role</label>
                     <input
                       value={targetRole}
                       onChange={e => setTargetRole(e.target.value)}
@@ -1054,19 +1309,72 @@ export function Onboarding() {
                       })}
                     </div>
                   </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.8rem' }}>Career Goal</label>
-                      <button
-                        type="button"
-                        onClick={() => void generateAiGoals()}
-                        disabled={aiGoalLoading}
-                        className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs transition-all disabled:opacity-50"
-                        style={{ background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa' }}
-                      >
-                        {aiGoalLoading ? '⏳ Generating…' : '✨ Generate with AI'}
-                      </button>
+                  <div className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <p style={{ color: 'var(--cp-text-primary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px' }}>
+                      Current Salary
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Country
+                        </label>
+                        <input
+                          value={country}
+                          onChange={e => setCountry(e.target.value)}
+                          placeholder="India, United States..."
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Currency
+                        </label>
+                        <div
+                          className="w-full rounded-xl px-3 py-2"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        >
+                          {salaryLocale.symbol} {salaryCurrency}
+                        </div>
+                      </div>
                     </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Amount
+                        </label>
+                        <input
+                          value={currentSalary}
+                          onChange={e => setCurrentSalary(e.target.value)}
+                          placeholder={salaryCurrency === 'INR' ? '1200000' : '95000'}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Salary Type
+                        </label>
+                        <select
+                          value={salaryType}
+                          onChange={e => setSalaryType(e.target.value)}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        >
+                          {salaryLocale.showMonthlyAndYearly ? (
+                            <>
+                              <option value="Monthly">Monthly</option>
+                              <option value="Annual">Annual</option>
+                            </>
+                          ) : (
+                            <option value="Annual">Annual</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.8rem', display: 'block', marginBottom: '6px' }}>Career Goal</label>
                     {aiGoalError && (
                       <p className="mb-1 text-xs text-rose-400">{aiGoalError}</p>
                     )}
@@ -1087,6 +1395,18 @@ export function Onboarding() {
                             {g}
                           </button>
                         ))}
+                      </div>
+                    )}
+                    {aiCourseSuggestions.length > 0 && (
+                      <div className="rounded-xl px-3 py-2 mb-2" style={{ background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.2)' }}>
+                        <p style={{ color: '#67e8f9', fontSize: '0.7rem', fontWeight: 600, marginBottom: '6px' }}>Recommended Courses</p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {aiCourseSuggestions.map(c => (
+                            <span key={c} className="rounded-lg px-2 py-1" style={{ background: 'rgba(6,182,212,0.14)', color: '#22d3ee', fontSize: '0.68rem' }}>
+                              {c}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     )}
                     <textarea

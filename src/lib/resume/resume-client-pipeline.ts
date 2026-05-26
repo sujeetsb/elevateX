@@ -64,21 +64,6 @@ export async function postResumeFromUploadThingParts(parts: {
 }): Promise<
   { ok: true; resumeId: string; prefill: unknown } | { ok: false; message: string }
 > {
-  const parseRes = await fetch('/api/v1/onboarding/resume/parse', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      fileUrl: parts.fileUrl,
-      fileName: parts.fileName,
-      mimeType: parts.mimeType,
-    }),
-    credentials: 'include',
-  });
-  const parseJson = await parseRes.json().catch(() => ({}));
-  if (!parseRes.ok) {
-    return { ok: false, message: parseApiError(parseJson, 'Could not parse that file.') };
-  }
-
   const uploadRes = await fetch('/api/v1/resumes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -96,6 +81,25 @@ export async function postResumeFromUploadThingParts(parts: {
   }
   const resumeId = uploadJson?.data?.resumeId as string | undefined;
   if (!resumeId) return { ok: false, message: 'Server did not return a resume id.' };
+  if (uploadJson?.data?.skippedParse && uploadJson?.data?.parsedJson) {
+    return { ok: true, resumeId, prefill: uploadJson.data.parsedJson };
+  }
+
+  const parseRes = await fetch('/api/v1/onboarding/resume/parse', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileUrl: parts.fileUrl,
+      fileName: parts.fileName,
+      mimeType: parts.mimeType,
+    }),
+    credentials: 'include',
+  });
+  const parseJson = await parseRes.json().catch(() => ({}));
+  if (!parseRes.ok) {
+    return { ok: false, message: parseApiError(parseJson, 'Could not parse that file.') };
+  }
+
   return { ok: true, resumeId, prefill: parseJson.data };
 }
 

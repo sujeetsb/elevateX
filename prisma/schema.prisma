@@ -54,6 +54,7 @@ model VerificationToken {
 enum UserRole {
   USER
   ADMIN
+  SUPER_ADMIN
 }
 
 model User {
@@ -64,6 +65,7 @@ model User {
   image         String?
   passwordHash  String?
   role          UserRole  @default(USER)
+  suspendedAt   DateTime?
   deletedAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -80,12 +82,19 @@ model User {
   applications        JobApplication[]
   roadmaps            LearningRoadmap[]
   learningProgress    LearningProgress[]
+  courses             Course[]
+  courseEnrollments   UserCourse[]
+  gamificationEvents  GamificationEvent[]
   aiConversations     AiConversation[]
   aiRecommendations   AiRecommendation[]
   activityLogs        ActivityLog[]
   notifications       Notification[]
   analytics           UserAnalytics?
   cachedAiResponses   CachedAiResponse[]
+  userInsights        UserInsights?
+  courseCertificates  CourseCertificate[]
+  optimizedResumes      OptimizedResume[]
+  generatedCoverLetters GeneratedCoverLetter[]
 }
 
 model Profile {
@@ -112,12 +121,17 @@ model Profile {
   githubUrl            String?
   portfolioUrl         String?
   onboardingComplete   Boolean   @default(false)
+  subscriptionTier     String    @default("FREE")
+  profileVersion       Int       @default(0)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([targetRole])
+  @@index([preferredIndustry])
+  @@index([country, salaryCurrency])
+  @@index([userId, profileVersion])
 }
 
 model UserCertification {
@@ -203,6 +217,7 @@ model Resume {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, deletedAt])
+  @@index([userId, deletedAt, updatedAt])
   @@index([parseStatus])
   @@index([userId, contentHash])
 }
@@ -271,11 +286,14 @@ model Job {
 
   savedBy      SavedJob[]
   applications JobApplication[]
+  optimizedResumes OptimizedResume[]
+  generatedCoverLetters GeneratedCoverLetter[]
 
   @@unique([source, externalId])
   @@index([company])
   @@index([title])
   @@index([deletedAt])
+  @@index([deletedAt, updatedAt])
 }
 
 model SavedJob {
@@ -366,6 +384,164 @@ model LearningProgress {
 
   @@index([userId])
   @@index([roadmapId])
+  @@index([userId, roadmapId])
+}
+
+// ─── AI Courses ───────────────────────────────────────────────────
+
+enum CourseDifficulty {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum CourseStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum LessonType {
+  VIDEO
+  READING
+  QUIZ
+  PROJECT
+}
+
+enum UserCourseStatus {
+  ACTIVE
+  COMPLETED
+  PAUSED
+  SAVED
+}
+
+model Course {
+  id               String           @id @default(cuid())
+  userId           String?
+  title            String
+  description      String           @db.Text
+  category         String           @default("AI Generated")
+  difficulty       CourseDifficulty @default(INTERMEDIATE)
+  estimatedDays    Int              @default(30)
+  totalXp          Int              @default(1500)
+  thumbnail        String           @default("🤖")
+  tags             String[]         @default([])
+  aiGenerated      Boolean          @default(true)
+  status           CourseStatus     @default(ACTIVE)
+  expectedOutcomes String[]         @default([])
+  timeline         Json?
+  metadata         Json?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  deletedAt        DateTime?
+
+  user        User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  modules     CourseModule[]
+  enrollments UserCourse[]
+  certificates CourseCertificate[]
+
+  @@index([userId, status])
+  @@index([status, deletedAt])
+  @@index([deletedAt])
+}
+
+model CourseModule {
+  id          String   @id @default(cuid())
+  courseId    String
+  orderIndex  Int      @default(0)
+  title       String
+  description String   @db.Text
+  xpReward    Int      @default(200)
+  locked      Boolean  @default(false)
+  subtopics   String[] @default([])
+  createdAt   DateTime @default(now())
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId, orderIndex])
+  @@index([courseId])
+}
+
+model Lesson {
+  id           String     @id @default(cuid())
+  moduleId     String
+  orderIndex   Int        @default(0)
+  title        String
+  content      String?    @db.Text
+  duration     String     @default("15 min")
+  type         LessonType @default(READING)
+  xpReward     Int        @default(80)
+  assignment   String?    @db.Text
+  projectBrief String?    @db.Text
+  createdAt    DateTime   @default(now())
+
+  module   CourseModule     @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  quiz     Quiz?
+  progress LessonProgress[]
+
+  @@index([moduleId, orderIndex])
+  @@index([moduleId])
+}
+
+model Quiz {
+  id           String @id @default(cuid())
+  lessonId     String @unique
+  questions    Json
+  passingScore Int    @default(70)
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+}
+
+model UserCourse {
+  id               String           @id @default(cuid())
+  userId           String
+  courseId         String
+  status           UserCourseStatus @default(ACTIVE)
+  enrolledAt       DateTime         @default(now())
+  completedAt      DateTime?
+  progressPct      Int              @default(0)
+  xpEarned         Int              @default(0)
+  timeSpentMinutes Int              @default(0)
+  saved            Boolean          @default(false)
+  lastAccessedAt   DateTime         @default(now())
+
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course         Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessonProgress LessonProgress[]
+
+  @@unique([userId, courseId])
+  @@index([userId, status])
+}
+
+model LessonProgress {
+  id               String    @id @default(cuid())
+  userCourseId     String
+  lessonId         String
+  completed        Boolean   @default(false)
+  completedAt      DateTime?
+  quizScore        Int?
+  timeSpentMinutes Int       @default(0)
+
+  userCourse UserCourse @relation(fields: [userCourseId], references: [id], onDelete: Cascade)
+  lesson     Lesson     @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userCourseId, lessonId])
+}
+
+model GamificationEvent {
+  id         String   @id @default(cuid())
+  userId     String
+  actionKey  String
+  actionType String
+  xpAmount   Int
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, actionKey])
+  @@index([userId, createdAt])
 }
 
 // ─── AI ─────────────────────────────────────────────────────────
@@ -487,6 +663,11 @@ enum ActivityVerb {
   ROADMAP_GENERATED
   AI_CHAT
   CACHE_INVALIDATE
+  COURSE_START
+  COURSE_COMPLETE
+  LESSON_COMPLETE
+  COVER_LETTER
+  DAILY_LOGIN
 }
 
 model ActivityLog {
@@ -517,4 +698,101 @@ model UserAnalytics {
   updatedAt        DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Shared profile intelligence (generated once after resume parse) ───
+
+model UserInsights {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  resumeId           String?
+  sourceHash         String?
+  careerGoals        Json?
+  targetRoles        Json?
+  recommendedCourses Json?
+  salaryInsights     Json?
+  skillsGap          Json?
+  careerPath         Json?
+  industry           String?
+  profileVersion     Int?
+  generatedAt        DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, sourceHash])
+  @@index([userId, profileVersion])
+  @@index([industry])
+  @@index([updatedAt])
+}
+
+// ─── Course completion certificates ───────────────────────────────
+
+model CourseCertificate {
+  id            String   @id @default(cuid())
+  userId        String
+  courseId      String
+  userCourseId  String?
+  certificateId String   @unique
+  userName      String
+  courseTitle   String
+  completedAt   DateTime
+  xpEarned      Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([userId])
+  @@index([courseId])
+}
+
+// ─── Job-tailored resume optimizations ──────────────────────────
+
+model OptimizedResume {
+  id               String   @id @default(cuid())
+  userId           String
+  jobId            String
+  jobTitle         String
+  company          String?
+  sourceResumeId   String?
+  template         String   @default("professional")
+  resumeVersion    Int      @default(1)
+  content          Json
+  optimizedText    String?  @db.Text
+  missingKeywords  Json?
+  atsImprovements  Json?
+  suggestedChanges Json?
+  atsScoreBefore   Int?
+  atsScoreAfter    Int?
+  pdfUrl           String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([userId, jobId])
+  @@index([createdAt])
+}
+
+model GeneratedCoverLetter {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String
+  content   Json
+  pdfUrl    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([userId, jobId])
+  @@index([createdAt])
 }

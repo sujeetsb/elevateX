@@ -9,6 +9,8 @@ import { chatAssistantSystem } from '@/server/ai/prompts/registry';
 import { generateText } from '@/server/ai/gemini';
 import { logger } from '@/server/logger';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
+import { getUserSubscriptionTier, isProTier } from '@/server/subscription/require-pro';
+import { awardGamificationXp } from '@/server/gamification/gamification.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +34,11 @@ export async function POST(req: Request) {
     if (!session?.user?.id) throw unauthorized();
 
     await enforceRateLimit(`user:${session.user.id}:mentor.messages`, { limit: 25, window: '60 m' });
+
+    const tier = await getUserSubscriptionTier(session.user.id);
+    if (!isProTier(tier)) {
+      await enforceRateLimit(`user:${session.user.id}:mentor.free`, { limit: 10, window: '1440 m' });
+    }
 
     const body = bodySchema.parse(await req.json());
     const userId = session.user.id;
@@ -206,6 +213,14 @@ export async function POST(req: Request) {
       where: { userId },
       create: { userId, aiTokensMonth: tokenEstimate },
       update: { aiTokensMonth: { increment: tokenEstimate } },
+    });
+
+    const today = new Date().toISOString().slice(0, 10);
+    await awardGamificationXp({
+      userId,
+      amount: 5,
+      actionKey: `ai-chat:${conversation.id}:${today}`,
+      actionType: 'AI_CHAT',
     });
 
     return NextResponse.json({

@@ -7,6 +7,7 @@ import { fetchResumeBytesFromUrl } from '@/lib/storage/provider';
 import { getSession } from '@/server/http/get-session';
 import { unauthorized } from '@/server/errors/http-error';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
+import { validateResumeUpload } from '@/lib/resume/validate-upload';
 import { logger } from '@/server/logger';
 
 export const dynamic = 'force-dynamic';
@@ -64,6 +65,14 @@ export async function POST(req: Request) {
     }
 
     const body = parsed.data;
+
+    const fileCheck = validateResumeUpload(body.fileName, body.mimeType);
+    if (!fileCheck.ok) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'BAD_REQUEST', message: fileCheck.message } },
+        { status: 400 },
+      );
+    }
 
     let buf: Buffer;
     try {

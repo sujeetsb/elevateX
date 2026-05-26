@@ -46,22 +46,29 @@ export async function GET() {
       }),
     ]);
 
-    const [gamification, analyticsRaw] = await Promise.all([
-      getGamificationFromSnapshot({
+    const [gamification, alreadyClaimedToday] = await (async () => {
+      const gam = await getGamificationFromSnapshot({
         userId: session.user.id,
         latestResumeAtsScore: latestResume?.atsScore ?? null,
-      }),
-      prisma.userAnalytics.findUnique({
-        where: { userId: session.user.id },
-        select: { snapshot: true },
-      }),
-    ]);
+      });
+      const todayUtc = new Date().toISOString().slice(0, 10);
+      const rawSnap = analytics?.snapshot as { lastDailyClaimDate?: string } | null;
+      return [gam, rawSnap?.lastDailyClaimDate === todayUtc] as const;
+    })();
 
-    const todayUtc = new Date().toISOString().slice(0, 10);
-    const rawSnap = analyticsRaw?.snapshot as { lastDailyClaimDate?: string } | null;
-    const alreadyClaimedToday = rawSnap?.lastDailyClaimDate === todayUtc;
-
-    const payload = { user, profile, skills, analytics, latestResume, certifications, gamification, alreadyClaimedToday };
+    const resumeParsed = latestResume?.parseStatus === 'COMPLETE';
+    const payload = {
+      user,
+      profile,
+      skills,
+      analytics,
+      latestResume,
+      certifications,
+      gamification,
+      alreadyClaimedToday,
+      resumeParsed,
+      profileVersion: profile?.profileVersion ?? 0,
+    };
     await cacheService.setJson(key, payload, 120);
     return NextResponse.json({ ok: true, source: 'db', data: payload });
   } catch (e) {

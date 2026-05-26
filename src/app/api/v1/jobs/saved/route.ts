@@ -96,3 +96,25 @@ export async function POST(req: Request) {
   }
 }
 
+export async function DELETE(req: Request) {
+  try {
+    const session = await getSession();
+    if (!session?.user?.id) throw unauthorized();
+
+    const { searchParams } = new URL(req.url);
+    const jobId = searchParams.get('jobId');
+    if (!jobId) {
+      return NextResponse.json({ ok: false, message: 'jobId required' }, { status: 400 });
+    }
+
+    await prisma.savedJob.deleteMany({
+      where: { userId: session.user.id, jobId },
+    });
+
+    await cacheService.invalidateUser(session.user.id);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    return handleApiError(e);
+  }
+}
+

@@ -8,6 +8,8 @@ import { unauthorized, notFound, badRequest } from '@/server/errors/http-error';
 import { cacheService } from '@/server/cache/cache-service';
 import { inngest } from '@/server/inngest/client';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
+import { requireProSession } from '@/server/subscription/require-pro';
+import { awardGamificationXp } from '@/server/gamification/gamification.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,10 +55,10 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const session = await getSession();
-    if (!session?.user?.id) throw unauthorized();
+    const { session } = await requireProSession();
+    const userId = session.user.id;
 
-    await enforceRateLimit(`user:${session.user.id}:jobs.applications`, { limit: 30, window: '60 m' });
+    await enforceRateLimit(`user:${userId}:jobs.applications`, { limit: 30, window: '60 m' });
 
     const body = bodySchema.parse(await req.json());
     const status = body.status ?? ApplicationStatus.APPLIED;
@@ -66,8 +68,6 @@ export async function POST(req: Request) {
       select: { id: true },
     });
     if (!job) throw notFound('Job not found');
-
-    const userId = session.user.id;
 
     await prisma.$transaction(async tx => {
       // Ensure a single active application per user+job by updating the latest non-deleted row.
@@ -112,8 +112,15 @@ export async function POST(req: Request) {
     });
 
     void cacheService.invalidateUser(userId);
-    // Recompute ranked recommendations asynchronously.
     void inngest.send([{ name: 'app/recommendations.refresh', data: { userId } }]);
+
+    const today = new Date().toISOString().slice(0, 10);
+    await awardGamificationXp({
+      userId,
+      amount: 20,
+      actionKey: `job-apply:${body.jobId}:${today}`,
+      actionType: 'JOB_APPLY',
+    });
 
     return NextResponse.json({ ok: true });
   } catch (e) {

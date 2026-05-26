@@ -9,6 +9,7 @@ const nextConfig = {
       '@napi-rs/canvas',
       '@prisma/client',
       'bcryptjs',
+      'inngest',
       'pdf-parse',
       'pdfjs-dist',
     ],

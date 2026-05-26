@@ -3,39 +3,28 @@
 import { useEffect, type ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
-import { Home, Map, BookOpen, Briefcase, User } from 'lucide-react';
 import { useGame } from './GameContext';
 import { Sidebar } from './Sidebar';
-
-const navItems = [
-  { path: '/app/dashboard', icon: Home, label: 'Home' },
-  { path: '/app/roadmap', icon: Map, label: 'Roadmap' },
-  { path: '/app/courses', icon: BookOpen, label: 'Courses' },
-  { path: '/app/jobs', icon: Briefcase, label: 'Jobs' },
-  { path: '/app/profile', icon: User, label: 'Profile' },
-];
+import { appNavItems } from '@/lib/navigation/app-nav';
 
 export function Layout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname() ?? '';
-  const { showXpBurst, lastXpGain, isAuthenticated, isOnboarded, isHydrating, user } = useGame();
+  const { showXpBurst, lastXpGain, isAuthenticated, isHydrating } = useGame();
   const isMentor = pathname === '/app/mentor';
+
+  useEffect(() => {
+    appNavItems.forEach(({ path }) => router.prefetch(path));
+    router.prefetch('/app/mentor');
+    router.prefetch('/app/ats');
+  }, [router]);
 
   useEffect(() => {
     if (isHydrating) return;
     if (!isAuthenticated) {
-      router.replace('/');
-      return;
+      router.replace('/sign-in');
     }
-    // Only redirect to onboarding once ME has actually loaded (email populated).
-    // This prevents a transient ME failure from bouncing an authenticated user
-    // back through onboarding — the localStorage fallback in GameContext handles
-    // the isOnboarded value when ME fails, but if that also fails we want to
-    // stay put rather than disrupt the user.
-    if (!isOnboarded && user.email) {
-      router.replace('/onboarding');
-    }
-  }, [isHydrating, isAuthenticated, isOnboarded, user.email, router]);
+  }, [isHydrating, isAuthenticated, router]);
 
   return (
     <div className="aurora-bg min-h-screen flex" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
@@ -102,13 +91,15 @@ export function Layout({ children }: { children: ReactNode }) {
           {/* Bottom nav — mobile/tablet only */}
           <nav className="nav-bottom nav-bottom-mobile fixed bottom-0 left-0 w-full z-50" aria-label="Primary">
             <div className="app-page flex items-center justify-around px-2 py-2">
-              {navItems.map(({ path, icon: Icon, label }) => {
+              {appNavItems.map(({ path, icon: Icon, label }) => {
                 const isActive = pathname === path || pathname.startsWith(`${path}/`);
                 return (
                   <button
                     key={path}
                     type="button"
                     onClick={() => router.push(path)}
+                    onMouseEnter={() => router.prefetch(path)}
+                    onFocus={() => router.prefetch(path)}
                     aria-current={isActive ? 'page' : undefined}
                     className="flex flex-col items-center gap-1 px-3 py-2 rounded-2xl transition-all duration-200 relative"
                     style={{

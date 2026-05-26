@@ -23,19 +23,25 @@ const emptyExtended = {
 export function buildFallbackResumeIntelligence(rawText: string): ResumeIntelligence {
   const q = heuristicResumeParse(rawText);
   const years = parseInt(String(q.experience).replace(/\D/g, ''), 10);
+  const email = typeof q.email === 'string' && q.email.trim() ? q.email.trim() : undefined;
+  const inferredCurrentRole = typeof q.currentRole === 'string' && q.currentRole.trim()
+    ? q.currentRole.trim()
+    : undefined;
   const base = resumeIntelligenceSchema.parse({
-    personal: { fullName: q.name },
+    personal: { fullName: q.name, email },
     summary: q.summary,
     ...emptyExtended,
     skills: q.skills,
     gaps: ['Quantified impact', 'Role-specific keywords', 'Leadership scope'],
-    experience: [],
+    experience: inferredCurrentRole
+      ? [{ title: inferredCurrentRole, role: inferredCurrentRole, company: null, bullets: [] }]
+      : [],
     education: [],
     certifications: [],
     projects: [],
     softSkills: ['Communication', 'Collaboration'],
     domainExpertise: [],
-    targetRolesSuggested: [q.currentRole],
+    targetRolesSuggested: [],
     yearsOfExperienceApprox: Number.isFinite(years) ? years : null,
     atsScore: 66,
     confidence: { overall: 0.35 },

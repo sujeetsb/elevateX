@@ -1,8 +1,11 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { useSession, signOut as nextAuthSignOut } from 'next-auth/react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { useSession } from 'next-auth/react';
+import { signOutUser } from '@/lib/auth/sign-out';
+import { normalizeCourse } from '@/lib/courses/normalize';
 import { STORAGE_KEYS } from '@/lib/brand';
+import { formatJobSalaryRange, resolveSalaryLocale } from '@/lib/salary/locale';
 
 function readOnboardingCache(userId: string): string | null {
   try {
@@ -63,6 +66,8 @@ export interface UserProfile {
   atsOptimized: boolean;
   projects: string[];
   themePreference: 'dark' | 'light' | 'system';
+  subscriptionTier: string;
+  profileVersion: number;
 }
 
 export interface Badge {
@@ -81,6 +86,8 @@ export interface Lesson {
   duration: string;
   type: 'video' | 'reading' | 'quiz' | 'project';
   completed: boolean;
+  content?: string;
+  quiz?: Array<{ question: string; options: string[]; correctIndex: number; difficulty?: string }>;
 }
 
 export interface Module {
@@ -166,7 +173,8 @@ interface GameContextType {
   isOnboarded: boolean;
   isAuthenticated: boolean;
   isHydrating: boolean;
-  refresh: () => Promise<void>;
+  refresh: (opts?: { silent?: boolean; force?: boolean }) => Promise<void>;
+  markOnboarded: () => void;
   xp: number;
   level: number;
   levelName: string;
@@ -178,17 +186,25 @@ interface GameContextType {
   badges: Badge[];
   courses: Course[];
   jobs: Job[];
+  jobsLoading: boolean;
+  jobsError: string | null;
   /** Full AI roadmap plan (includes stages, milestones, certifications, etc.). */
   roadmapPlan: RoadmapPlan | null;
   showXpBurst: boolean;
   lastXpGain: number;
   /** True if the user has already claimed their daily bonus today (server-driven). */
   alreadyClaimedToday: boolean;
-  signOut: () => void;
+  signOut: () => Promise<void>;
   addXP: (amount: number) => void;
   updateProfile: (data: Partial<UserProfile>) => Promise<boolean>;
   setAtsScore: (score: number) => void;
-  completeLesson: (courseId: string, moduleId: string, lessonId: string, xpReward?: number) => void;
+  completeLesson: (
+    courseId: string,
+    moduleId: string,
+    lessonId: string,
+    xpReward?: number,
+    opts?: { quizScore?: number; timeSpentMinutes?: number },
+  ) => void;
   addCourse: (course: Course) => void;
   /** Server-backed daily bonus (+25 XP max once per UTC day). */
   claimDailyBonus: () => Promise<{ claimed: boolean; error?: string }>;
@@ -221,6 +237,8 @@ const initialUser: UserProfile = {
   atsOptimized: false,
   projects: [],
   themePreference: 'system',
+  subscriptionTier: 'FREE',
+  profileVersion: 0,
 };
 
 const GameContext = createContext<GameContextType | null>(null);
@@ -237,12 +255,17 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [badges, setBadges] = useState<Badge[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [showXpBurst, setShowXpBurst] = useState(false);
   const [lastXpGain, setLastXpGain] = useState(0);
   const [roadmapPlan, setRoadmapPlan] = useState<RoadmapPlan | null>(null);
   const [alreadyClaimedToday, setAlreadyClaimedToday] = useState(false);
   const isAuthenticated = status === 'authenticated';
   const isHydrating = status === 'loading' || isHydratingApp;
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const lastRefreshAtRef = useRef(0);
+  const mountedUserIdRef = useRef<string | null>(null);
 
   const { level, currentLevelXp, totalXpForNextLevel, levelName } = calculateLevel(xp);
   const profileCompletion = calculateProfileCompletion(user);
@@ -332,201 +355,197 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }
   }, [session?.user?.id]);
 
-  const signOut = useCallback(() => {
-    // Clear onboarding cache so the next user on the same browser starts fresh.
+  const markOnboarded = useCallback(() => {
+    setIsOnboarded(true);
+    if (session?.user?.id) {
+      try { writeOnboardingCache(session.user.id); } catch { /* ignore */ }
+    }
+  }, [session?.user?.id]);
+
+  const signOut = useCallback(async () => {
     if (session?.user?.id) {
       try { clearOnboardingCache(session.user.id); } catch { /* ignore */ }
     }
-    void nextAuthSignOut({ redirect: false }).finally(() => {
-      setUser(initialUser);
-      setIsOnboarded(false);
-      setXp(0);
-      setStreak(0);
-      setAtsScore(0);
-      setBadges([]);
-      setCourses([]);
-      setJobs([]);
-    });
-  }, []);
+    setUser(initialUser);
+    setIsOnboarded(false);
+    setXp(0);
+    setStreak(0);
+    setAtsScore(0);
+    setBadges([]);
+    setCourses([]);
+    setJobs([]);
+    setJobsLoading(false);
+    setJobsError(null);
+    setRoadmapPlan(null);
+    void signOutUser();
+  }, [session?.user?.id]);
 
-  const refreshFromServer = useCallback(async () => {
+  const refreshFromServer = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
     if (!session?.user?.id) return;
+    const silent = Boolean(opts?.silent);
+    const force = Boolean(opts?.force);
+    const now = Date.now();
+    // Short-lived in-memory stale guard to avoid duplicate cascades from rapid UI effects.
+    if (!force && now - lastRefreshAtRef.current < 8_000) return;
+    if (refreshInFlightRef.current) {
+      await refreshInFlightRef.current;
+      return;
+    }
 
-    setIsHydratingApp(true);
+    const run = (async () => {
+      if (!silent) setIsHydratingApp(true);
+    setJobsLoading(true);
+    setJobsError(null);
     try {
-      const meRes = await fetch('/api/v1/me', { credentials: 'include' });
-      if (!meRes.ok) throw new Error('Failed to load /api/v1/me');
-      const meJson = await meRes.json();
+      const [meRes, jobsRes, coursesRes, roadmapRes] = await Promise.all([
+        fetch('/api/v1/me', { credentials: 'include' }),
+        fetch('/api/v1/jobs/recommendations', { credentials: 'include' }),
+        fetch('/api/v1/courses', { credentials: 'include' }),
+        fetch('/api/v1/learning/roadmap', { credentials: 'include' }),
+      ]);
+      let profileSnapshot: Record<string, unknown> | null = null;
 
-      const data = meJson?.data ?? {};
-      const apiUser = data.user ?? {};
-      const profile = data.profile ?? {};
-      const skills = Array.isArray(data.skills) ? data.skills : [];
-      const latestResume = data.latestResume ?? null;
-      const gamification = data.gamification ?? null;
-      const rawCerts = Array.isArray(data.certifications) ? data.certifications : [];
+      if (meRes.ok) {
+        const meJson = await meRes.json();
+        const data = meJson?.data ?? {};
+        const apiUser = data.user ?? {};
+        const profile = data.profile ?? {};
+        profileSnapshot = profile as Record<string, unknown>;
+        const skills = Array.isArray(data.skills) ? data.skills : [];
+        const latestResume = data.latestResume ?? null;
+        const gamification = data.gamification ?? null;
+        const rawCerts = Array.isArray(data.certifications) ? data.certifications : [];
 
-      const mappedSkills = skills
-        .map((s: { skill?: { label?: string } }) => s?.skill?.label)
-        .filter(Boolean) as string[];
+        const mappedSkills = skills
+          .map((s: { skill?: { label?: string } }) => s?.skill?.label)
+          .filter(Boolean) as string[];
 
-      const ats = latestResume?.atsScore ?? null;
-      const resumeComplete = latestResume?.parseStatus === 'COMPLETE';
+        const ats = latestResume?.atsScore ?? null;
+        const resumeComplete = latestResume?.parseStatus === 'COMPLETE';
+        const themePreference = (profile?.themePreference ?? 'system') as 'dark' | 'light' | 'system';
+        const profileVersion = Number(profile?.profileVersion ?? 0);
 
-      setUser(prev => ({
-        ...prev,
-        name: apiUser?.name ?? prev.name,
-        email: apiUser?.email ?? '',
-        photo: apiUser?.image ?? null,
-        currentRole: profile?.currentRole ?? '',
-        experience: profile?.experienceYears ?? '',
-        skills: mappedSkills,
-        education: profile?.education ?? '',
-        certifications: rawCerts.map((c: Record<string, unknown>): UserCertification => ({
-          id: String(c.id ?? ''),
-          name: String(c.name ?? ''),
-          issuer: String(c.issuer ?? ''),
-          issueDate: (c.issueDate as string | null) ?? null,
-          expiryDate: (c.expiryDate as string | null) ?? null,
-          credentialId: (c.credentialId as string | null) ?? null,
-          credentialUrl: (c.credentialUrl as string | null) ?? null,
-        })),
-        careerGoal: profile?.careerGoal ?? '',
-        targetRole: profile?.targetRole ?? '',
-        preferredIndustry: profile?.preferredIndustry ?? '',
-        preferredIndustries: Array.isArray(profile?.preferredIndustries) ? profile.preferredIndustries : [],
-        linkedIn: profile?.linkedInUrl ?? '',
-        github: profile?.githubUrl ?? '',
-        bio: profile?.bio ?? '',
-        salaryGoal: profile?.salaryExpectation ?? '',
-        currentSalary: profile?.currentSalary ?? '',
-        salaryCurrency: profile?.salaryCurrency ?? 'USD',
-        salaryFrequency: profile?.salaryFrequency ?? 'Annual',
-        compensationType: profile?.compensationType ?? '',
-        country: profile?.country ?? '',
-        locationPreference: profile?.locationPreference ?? '',
-        resumeUploaded: Boolean(resumeComplete),
-        atsOptimized: ats != null ? Number(ats) >= 80 : false,
-        projects: [],
-        themePreference: (profile?.themePreference ?? 'system') as 'dark' | 'light' | 'system',
-      }));
-      setAlreadyClaimedToday(Boolean(data.alreadyClaimedToday));
+        setUser(prev => ({
+          ...prev,
+          name: apiUser?.name ?? prev.name,
+          email: apiUser?.email ?? '',
+          photo: apiUser?.image ?? null,
+          currentRole: profile?.currentRole ?? '',
+          experience: profile?.experienceYears ?? '',
+          skills: mappedSkills,
+          education: profile?.education ?? '',
+          certifications: rawCerts.map((c: Record<string, unknown>): UserCertification => ({
+            id: String(c.id ?? ''),
+            name: String(c.name ?? ''),
+            issuer: String(c.issuer ?? ''),
+            issueDate: (c.issueDate as string | null) ?? null,
+            expiryDate: (c.expiryDate as string | null) ?? null,
+            credentialId: (c.credentialId as string | null) ?? null,
+            credentialUrl: (c.credentialUrl as string | null) ?? null,
+          })),
+          careerGoal: profile?.careerGoal ?? '',
+          targetRole: profile?.targetRole ?? '',
+          preferredIndustry: profile?.preferredIndustry ?? '',
+          preferredIndustries: Array.isArray(profile?.preferredIndustries) ? profile.preferredIndustries : [],
+          linkedIn: profile?.linkedInUrl ?? '',
+          github: profile?.githubUrl ?? '',
+          bio: profile?.bio ?? '',
+          salaryGoal: profile?.salaryExpectation ?? '',
+          currentSalary: profile?.currentSalary ?? '',
+          salaryCurrency: profile?.salaryCurrency ?? 'USD',
+          salaryFrequency: profile?.salaryFrequency ?? 'Annual',
+          compensationType: profile?.compensationType ?? '',
+          country: profile?.country ?? '',
+          locationPreference: profile?.locationPreference ?? '',
+          resumeUploaded: Boolean(resumeComplete),
+          atsOptimized: ats != null ? Number(ats) >= 80 : false,
+          projects: [],
+          themePreference,
+          subscriptionTier: profile?.subscriptionTier ?? 'FREE',
+          profileVersion,
+        }));
+        setAlreadyClaimedToday(Boolean(data.alreadyClaimedToday));
 
-      const onboarded = Boolean(profile?.onboardingComplete);
-      setIsOnboarded(onboarded);
-      // Cache onboarding status so a transient ME failure on reload
-      // doesn't incorrectly redirect an authenticated user to onboarding.
-      if (onboarded && session?.user?.id) {
-        try { writeOnboardingCache(session.user.id); } catch { /* ignore */ }
-      }
-      setAtsScore(ats != null ? Number(ats) : 0);
-      setXp(gamification?.xp != null ? Number(gamification.xp) : 0);
-      setStreak(gamification?.streak != null ? Number(gamification.streak) : 0);
-      setBadges(Array.isArray(gamification?.badges) ? (gamification.badges as Badge[]) : []);
-
-      try {
-        const jobsRes = await fetch('/api/v1/jobs/recommendations', { credentials: 'include' });
-        if (jobsRes.ok) {
-          const jobsJson = await jobsRes.json();
-          const ranked = Array.isArray(jobsJson?.data) ? jobsJson.data : [];
-          setJobs(
-            ranked.map((r: Record<string, unknown>) => {
-              const job = r?.job as Record<string, unknown> | undefined;
-              return {
-                id: (job?.id as string) ?? String(r?.id ?? Math.random()),
-                title: (job?.title as string) ?? 'Untitled role',
-                company: (job?.company as string) ?? 'Unknown',
-                location: (job?.location as string) ?? 'Remote',
-                salary: [job?.salaryMin, job?.salaryMax].filter(v => typeof v === 'number').length
-                  ? `$${job?.salaryMin}k–$${job?.salaryMax}k`
-                  : '',
-                matchPercent: Number(r?.score ?? 0),
-                missingSkills: [],
-                xpReward: Math.max(50, Math.round(Number(r?.score ?? 0) * 1.2)),
-                type: 'Full-time',
-                postedDays: 0,
-                logo: '🏢',
-                url: typeof job?.url === 'string' ? job.url : undefined,
-              };
-            }),
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('cp-profile-loaded', { detail: { themePreference, profileVersion } }),
           );
-        } else {
-          setJobs([]);
         }
-      } catch {
-        setJobs([]);
+
+        const onboarded = Boolean(profile?.onboardingComplete);
+        setIsOnboarded(onboarded);
+        if (onboarded && session?.user?.id) {
+          try { writeOnboardingCache(session.user.id); } catch { /* ignore */ }
+        }
+        setAtsScore(ats != null ? Number(ats) : 0);
+        setXp(gamification?.xp != null ? Number(gamification.xp) : 0);
+        setStreak(gamification?.streak != null ? Number(gamification.streak) : 0);
+        setBadges(Array.isArray(gamification?.badges) ? (gamification.badges as Badge[]) : []);
       }
 
-      try {
-        const roadmapRes = await fetch('/api/v1/learning/roadmap', { credentials: 'include' });
-        const roadmapJson = roadmapRes.ok ? await roadmapRes.json() : null;
-        const roadmapData = roadmapJson?.data ?? null;
-        if (!roadmapData?.roadmap?.jsonPlan?.modules) {
-          setCourses([]);
-          setRoadmapPlan(null);
-        } else {
-          setRoadmapPlan(roadmapData.roadmap.jsonPlan as RoadmapPlan);
-          const modules = roadmapData.roadmap.jsonPlan.modules ?? [];
-          const resources = Array.isArray(roadmapData.resources) ? roadmapData.resources : [];
-          const byResourceId = roadmapData.progress?.byResourceId ?? {};
-
-          const coursesMapped: Course[] = modules.map((m: Record<string, unknown>, idx: number) => {
-            const moduleResources = resources.filter(
-              (r: { moduleTitle?: string }) => r.moduleTitle === m.title,
-            );
-            const lessons: Lesson[] = moduleResources.map((r: Record<string, unknown>, rIdx: number) => {
-              const completion = byResourceId?.[r.resourceId as string];
-              const completed = Boolean(completion?.completed);
-              return {
-                id: String(r.resourceId ?? `c-${idx}-l-${rIdx}`),
-                title: String(r.title ?? 'Lesson'),
-                duration: '10 min',
-                type: 'reading',
-                completed,
-              };
-            });
-            const allCompleted = lessons.length ? lessons.every(l => l.completed) : false;
-            const progress = lessons.length
-              ? Math.round((lessons.filter(l => l.completed).length / lessons.length) * 100)
-              : 0;
+      if (jobsRes.ok) {
+        const jobsJson = await jobsRes.json();
+        const ranked = Array.isArray(jobsJson?.data) ? jobsJson.data : [];
+        setJobs(
+          ranked.map((r: Record<string, unknown>) => {
+            const job = r?.job as Record<string, unknown> | undefined;
+            const reasons = Array.isArray(r?.reasons) ? (r.reasons as string[]) : [];
+            const missingSkills = reasons
+              .filter(reason => reason.startsWith('skill:'))
+              .slice(0, 4)
+              .map(reason => reason.replace('skill:', '').trim())
+              .filter(Boolean);
             return {
-              id: `course-${idx}`,
-              title: String(m.title ?? 'Module'),
-              description: String(m.title ?? ''),
-              category: 'Learning',
-              difficulty: 'Intermediate',
-              estimatedDays: roadmapData.roadmap.jsonPlan.weeks
-                ? Math.max(1, Math.round(roadmapData.roadmap.jsonPlan.weeks / modules.length))
-                : 7,
-              totalXp: 600,
-              progress,
-              modules: [
-                {
-                  id: `course-${idx}-m-0`,
-                  title: String(m.title ?? ''),
-                  description: String(m.title ?? ''),
-                  locked: false,
-                  completed: allCompleted,
-                  xpReward: 200,
-                  lessons,
-                },
-              ],
-              thumbnail: '📚',
-              tags: Array.from(new Set(moduleResources.map((r: { provider?: string }) => r.provider))).slice(
-                0,
-                4,
-              ) as string[],
-              aiGenerated: true,
+              id: (job?.id as string) ?? String(r?.id ?? Math.random()),
+              title: (job?.title as string) ?? 'Untitled role',
+              company: (job?.company as string) ?? 'Unknown',
+              location: (job?.location as string) ?? 'Remote',
+              salary: formatJobSalaryRange(
+                typeof job?.salaryMin === 'number' ? job.salaryMin : null,
+                typeof job?.salaryMax === 'number' ? job.salaryMax : null,
+                resolveSalaryLocale({
+                  salaryCurrency:
+                    typeof job?.currency === 'string'
+                      ? job.currency
+                      : (profileSnapshot?.salaryCurrency as string | undefined) ?? 'USD',
+                  country: (profileSnapshot?.country as string | undefined) ?? '',
+                  salaryFrequency:
+                    (profileSnapshot?.salaryFrequency as string | undefined) ?? 'Annual',
+                }),
+              ),
+              matchPercent: Number(r?.score ?? 0),
+              missingSkills,
+              xpReward: Math.max(50, Math.round(Number(r?.score ?? 0) * 1.2)),
+              type: (job?.employmentType as string) ?? 'Full-time',
+              postedDays: Number(job?.postedDays ?? 0),
+              logo: '🏢',
+              url: typeof job?.url === 'string' ? job.url : undefined,
             };
-          });
+          }),
+        );
+        setJobsError(null);
+      } else {
+        setJobsError('Unable to load job matches right now.');
+      }
 
-          setCourses(coursesMapped);
-        }
-      } catch {
+      if (coursesRes.ok) {
+        const coursesJson = await coursesRes.json();
+        const all = Array.isArray(coursesJson?.data?.all) ? coursesJson.data.all : [];
+        setCourses(all.map((c: Course) => normalizeCourse(c)).filter(Boolean) as Course[]);
+      } else {
         setCourses([]);
+      }
+
+      const roadmapJson = roadmapRes.ok ? await roadmapRes.json() : null;
+      const roadmapData = roadmapJson?.data ?? null;
+      if (roadmapData?.roadmap?.jsonPlan) {
+        setRoadmapPlan(roadmapData.roadmap.jsonPlan as RoadmapPlan);
+      } else {
+        setRoadmapPlan(null);
       }
     } catch (e) {
       console.warn('[GameContext] refreshFromServer failed', e);
+      setJobsError('Unable to refresh your data right now.');
       // Don't leave isOnboarded as false for an authenticated user when ME fails
       // transiently (network hiccup, cold start). Read the localStorage cache that
       // we wrote on the last successful ME call so the user isn't kicked to onboarding.
@@ -537,19 +556,34 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         } catch { /* ignore */ }
       }
     } finally {
-      setIsHydratingApp(false);
+      setJobsLoading(false);
+      if (!silent) setIsHydratingApp(false);
+      lastRefreshAtRef.current = Date.now();
     }
+    })();
+    refreshInFlightRef.current = run;
+    await run;
+    refreshInFlightRef.current = null;
   }, [session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) {
       setIsHydratingApp(false);
+      mountedUserIdRef.current = null;
       return;
     }
-    void refreshFromServer();
+    if (mountedUserIdRef.current === session.user.id) return;
+    mountedUserIdRef.current = session.user.id;
+    void refreshFromServer({ force: true });
   }, [session?.user?.id, refreshFromServer]);
 
-  const completeLesson = useCallback((courseId: string, moduleId: string, lessonId: string, xpReward = 80) => {
+  const completeLesson = useCallback((
+    courseId: string,
+    moduleId: string,
+    lessonId: string,
+    xpReward = 80,
+    opts?: { quizScore?: number; timeSpentMinutes?: number },
+  ) => {
     setCourses(prev => prev.map(course => {
       if (course.id !== courseId) return course;
       const updatedModules = course.modules.map(mod => {
@@ -558,23 +592,38 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           l.id === lessonId ? { ...l, completed: true } : l
         );
         const allCompleted = updatedLessons.every(l => l.completed);
-        return { ...mod, lessons: updatedLessons, completed: allCompleted };
+        return { ...mod, lessons: updatedLessons, completed: allCompleted, locked: false };
       });
-      const completedModules = updatedModules.filter(m => m.completed).length;
-      const progress = Math.round((completedModules / updatedModules.length) * 100);
+      const totalLessons = updatedModules.flatMap(m => m.lessons).length;
+      const done = updatedModules.flatMap(m => m.lessons).filter(l => l.completed).length;
+      const progress = totalLessons ? Math.round((done / totalLessons) * 100) : 0;
       return { ...course, modules: updatedModules, progress };
     }));
     addXP(xpReward);
 
-    // Persist completion server-side (no-op on duplicates).
     void (async () => {
       try {
-        await fetch('/api/v1/learning/progress/complete', {
+        const res = await fetch('/api/v1/courses/progress', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ resourceId: lessonId }),
+          body: JSON.stringify({
+            courseId,
+            lessonId,
+            quizScore: opts?.quizScore,
+            timeSpentMinutes: opts?.timeSpentMinutes,
+          }),
           credentials: 'include',
         });
+        if (res.ok) {
+          const json = await res.json();
+          const updated = json?.data?.course;
+          if (updated) {
+            const normalized = normalizeCourse(updated);
+            if (normalized) {
+              setCourses(prev => prev.map(c => (c.id === courseId ? normalized : c)));
+            }
+          }
+        }
       } catch {
         // Non-fatal: keep optimistic UI.
       }
@@ -582,9 +631,15 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, [addXP]);
 
   const addCourse = useCallback((course: Course) => {
-    setCourses(prev => [course, ...prev]);
-    addXP(150);
-  }, [addXP]);
+    const normalized = normalizeCourse(course);
+    if (!normalized) return;
+    setCourses(prev => {
+      if (prev.some(c => c.id === normalized.id)) {
+        return prev.map(c => (c.id === normalized.id ? normalized : c));
+      }
+      return [normalized, ...prev];
+    });
+  }, []);
 
   const claimDailyBonus = useCallback(async () => {
     try {
@@ -614,10 +669,10 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   return (
     <GameContext.Provider value={{
       user, isOnboarded, isAuthenticated, xp, level, levelName, currentLevelXp, totalXpForNextLevel,
-      streak, profileCompletion, atsScore, badges, courses, jobs, roadmapPlan,
+      streak, profileCompletion, atsScore, badges, courses, jobs, jobsLoading, jobsError, roadmapPlan,
       showXpBurst, lastXpGain, alreadyClaimedToday,
       isHydrating,
-      refresh: refreshFromServer,
+      refresh: refreshFromServer, markOnboarded,
       signOut, addXP, updateProfile, setAtsScore, completeLesson, addCourse, claimDailyBonus,
     }}>
       {children}

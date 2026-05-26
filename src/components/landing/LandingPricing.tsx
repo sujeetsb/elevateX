@@ -13,8 +13,14 @@ const plans = [
     price: '$0',
     period: 'forever',
     highlighted: false,
-    features: ['Resume Analysis', 'Career Paths', 'Limited Chatbot'],
-    cta: 'Get Started',
+    features: [
+      'AI Resume Analysis & ATS score',
+      'Career path roadmap',
+      'Basic salary insights',
+      '2 AI-generated courses',
+      'Limited chatbot messages',
+    ],
+    cta: 'Get Started Free',
     ctaVariant: 'outline' as const,
   },
   {
@@ -22,8 +28,14 @@ const plans = [
     price: '$19',
     period: '/month',
     highlighted: true,
-    features: ['Job Apply', 'Cover Letters', 'Advanced AI', 'Unlimited Chatbot'],
-    cta: 'Upgrade',
+    features: [
+      'Unlimited AI courses',
+      'Job apply & cover letters',
+      'Premium salary charts & projections',
+      'Advanced AI mentor (unlimited)',
+      'Priority course generation',
+    ],
+    cta: 'Start PRO Trial',
     ctaVariant: 'default' as const,
   },
 ];
@@ -37,7 +49,7 @@ export function LandingPricing({ onGetStarted }: LandingPricingProps) {
             Simple, transparent pricing
           </h2>
           <p className="text-[var(--cp-text-muted)]">
-            Start free. Upgrade when you&apos;re ready to apply and unlock advanced AI.
+            Start free with resume analysis and career paths. Upgrade to PRO when you&apos;re ready to apply, earn more, and unlock advanced AI.
           </p>
         </div>
 
@@ -72,11 +84,7 @@ export function LandingPricing({ onGetStarted }: LandingPricingProps) {
                 ))}
               </ul>
 
-              <Button
-                variant={plan.ctaVariant}
-                className="w-full"
-                onClick={onGetStarted}
-              >
+              <Button variant={plan.ctaVariant} className="w-full" onClick={onGetStarted}>
                 {plan.cta}
               </Button>
             </div>

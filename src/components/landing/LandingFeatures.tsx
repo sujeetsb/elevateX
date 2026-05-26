@@ -3,36 +3,14 @@
 import { motion } from 'motion/react';
 
 const features = [
-  {
-    emoji: '🤖',
-    title: 'AI Career Roadmap',
-    description: 'Personalized path to dream role',
-  },
-  {
-    emoji: '📄',
-    title: 'ATS Optimizer',
-    description: 'Improve resume score',
-  },
-  {
-    emoji: '💼',
-    title: 'Smart Job Match',
-    description: 'AI job recommendations',
-  },
-  {
-    emoji: '🎮',
-    title: 'Gamified Learning',
-    description: 'Earn XP and badges',
-  },
-  {
-    emoji: '✍',
-    title: 'Cover Letter Generator',
-    description: 'Tailored letters in seconds',
-  },
-  {
-    emoji: '🧠',
-    title: 'Career AI Chatbot',
-    description: '24/7 mentor for your goals',
-  },
+  { emoji: '📄', title: 'AI Resume Analysis', description: 'ATS scoring, keyword gaps, and instant optimization tips' },
+  { emoji: '🗺', title: 'Career Paths', description: 'Personalized AI roadmap from your current role to your target' },
+  { emoji: '💰', title: 'Salary Intelligence', description: 'Location-aware pay benchmarks, projections & currency support' },
+  { emoji: '📚', title: 'AI Courses', description: 'Generate and complete skill-gap courses tailored to you' },
+  { emoji: '🧠', title: 'AI Career Chatbot', description: '24/7 mentor for goals, interviews, and career decisions' },
+  { emoji: '💼', title: 'Smart Job Match', description: 'AI-ranked roles with match scores and one-click apply (PRO)' },
+  { emoji: '🎮', title: 'Gamification', description: 'Earn XP, streaks, and badges as you grow your career' },
+  { emoji: '✍', title: 'Cover Letters', description: 'PRO: tailored cover letters generated in seconds' },
 ];
 
 export function LandingFeatures() {
@@ -44,11 +22,11 @@ export function LandingFeatures() {
             Everything you need to grow
           </h2>
           <p className="text-[var(--cp-text-muted)]">
-            From resume analysis to job applications — one platform for your entire career journey.
+            From resume analysis to job applications — one AI-powered platform for your entire career journey.
           </p>
         </div>
 
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
           {features.map((feature, i) => (
             <motion.div
               key={feature.title}
