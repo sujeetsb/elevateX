@@ -187,6 +187,10 @@ export async function persistResumeIntelligence(resumeId: string, data: ResumeIn
 
   await batchLinkUserSkills(userId, data.skills, 'resume_ai', 48);
 
+  void import('@/server/services/analytics-history.service').then(({ appendSkillHistoryPoint }) =>
+    appendSkillHistoryPoint(userId, data.skills),
+  );
+
   const { bumpProfileVersion } = await import('@/server/services/profile-version.service');
   await bumpProfileVersion(userId);
 

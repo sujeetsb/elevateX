@@ -14,6 +14,8 @@ export const INSIGHT_RELEVANT_PROFILE_FIELDS = [
   'locationPreference',
   'currentSalary',
   'salaryExpectation',
+  'salaryGoalCurrency',
+  'salaryGoalFrequency',
   'salaryCurrency',
   'salaryFrequency',
   'compensationType',
@@ -32,6 +34,8 @@ export function computeProfileSourceHash(parts: {
   locationPreference?: string | null;
   currentSalary?: string | null;
   salaryExpectation?: string | null;
+  salaryGoalCurrency?: string | null;
+  salaryGoalFrequency?: string | null;
   salaryCurrency?: string | null;
   salaryFrequency?: string | null;
   compensationType?: string | null;
@@ -52,6 +56,8 @@ export function computeProfileSourceHash(parts: {
         parts.locationPreference ?? '',
         parts.currentSalary ?? '',
         parts.salaryExpectation ?? '',
+        parts.salaryGoalCurrency ?? '',
+        parts.salaryGoalFrequency ?? '',
         parts.salaryCurrency ?? '',
         parts.salaryFrequency ?? '',
         parts.compensationType ?? '',

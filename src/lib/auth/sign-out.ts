@@ -2,9 +2,11 @@
 
 import { signOut as nextAuthSignOut } from 'next-auth/react';
 import { resetAppQueryCacheForSignOut } from '@/lib/query-client';
+import { clearRoutingCache } from '@/lib/auth/routing-cache';
 
 async function clearClientAuthState() {
   await resetAppQueryCacheForSignOut();
+  clearRoutingCache();
   try {
     const keys = Object.keys(localStorage);
     for (const key of keys) {
@@ -45,6 +47,13 @@ export async function signOutAdmin() {
   await clearClientAuthState();
   await destroySession();
   hardRedirect('/admin/login?loggedOut=1');
+}
+
+/** Invalid session — user missing from DB. Notify, logout, send to sign-up. */
+export async function signOutUnregistered() {
+  await clearClientAuthState();
+  await destroySession();
+  hardRedirect('/sign-up?loggedOut=1&reason=unregistered');
 }
 
 export async function signOutUser() {

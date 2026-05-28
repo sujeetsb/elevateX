@@ -10,7 +10,8 @@ import { generateText } from '@/server/ai/gemini';
 import { logger } from '@/server/logger';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
 import { getUserSubscriptionTier, isProTier } from '@/server/subscription/require-pro';
-import { awardGamificationXp } from '@/server/gamification/gamification.service';
+import { spendGamificationXp } from '@/server/gamification/gamification.service';
+import { getXpCost } from '@/lib/gamification/xp-costs';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +43,15 @@ export async function POST(req: Request) {
 
     const body = bodySchema.parse(await req.json());
     const userId = session.user.id;
+
+    const xpCost = getXpCost('AI_MENTOR');
+    const actionKey = `ai-mentor:${userId}:${Date.now()}`;
+    await spendGamificationXp({
+      userId,
+      amount: xpCost,
+      actionKey,
+      actionType: 'AI_MENTOR',
+    });
 
     // Determine or create conversation.
     const conversation = await (async () => {
@@ -215,19 +225,12 @@ export async function POST(req: Request) {
       update: { aiTokensMonth: { increment: tokenEstimate } },
     });
 
-    const today = new Date().toISOString().slice(0, 10);
-    await awardGamificationXp({
-      userId,
-      amount: 5,
-      actionKey: `ai-chat:${conversation.id}:${today}`,
-      actionType: 'AI_CHAT',
-    });
-
     return NextResponse.json({
       ok: true,
       data: {
         conversationId: conversation.id,
         message: { id: assistantMessage.id, role: 'assistant', content: assistantMessage.content },
+        xpCost,
       },
     });
   } catch (e) {

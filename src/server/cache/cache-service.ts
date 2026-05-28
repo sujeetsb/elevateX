@@ -45,6 +45,7 @@ export class CacheService {
       cacheKeys.userSkills(userId),
       cacheKeys.jobRecommendations(userId),
       cacheKeys.learningRecommendations(userId),
+      cacheKeys.profileAnalytics(userId),
     );
   }
 }

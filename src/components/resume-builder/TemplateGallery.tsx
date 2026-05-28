@@ -32,14 +32,14 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
-        <LayoutTemplate size={18} color="#a78bfa" />
+        <LayoutTemplate size={18} style={{ color: 'var(--cp-accent-light, #a78bfa)' }} />
         <div>
-          <h3 style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.95rem' }}>ATS-friendly templates</h3>
-          <p style={{ color: '#64748b', fontSize: '0.78rem' }}>Live preview · one-click switch · print-ready</p>
+          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '0.95rem' }}>ATS-friendly templates</h3>
+          <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>Live preview · one-click switch · print-ready</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
         {templateOptions.map((t, i) => {
           const active = selectedId === t.id;
           return (
@@ -50,31 +50,31 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.04 }}
               onClick={() => onSelect(t.id)}
-              className="text-left rounded-2xl p-4 relative overflow-hidden glass-card"
+              className="text-left rounded-2xl p-4 sm:p-5 relative overflow-hidden glass-card w-full min-h-[140px]"
               style={{
-                border: active ? '1px solid rgba(124,58,237,0.55)' : '1px solid rgba(255,255,255,0.08)',
-                boxShadow: active ? '0 0 0 1px rgba(124,58,237,0.2)' : undefined,
+                border: active ? '1px solid var(--cp-border-accent)' : '1px solid var(--cp-border-subtle)',
+                boxShadow: active ? 'var(--cp-shadow-focus)' : undefined,
               }}
             >
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div>
-                  <div style={{ color: '#f8fafc', fontWeight: 700, fontSize: '0.88rem' }}>{t.name}</div>
-                  <div style={{ color: '#64748b', fontSize: '0.72rem' }}>{t.tagline}</div>
+                  <div style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '0.88rem' }}>{t.name}</div>
+                  <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>{t.tagline}</div>
                 </div>
                 {active && (
-                  <span className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'rgba(124,58,237,0.25)' }}>
-                    <Check size={16} color="#a78bfa" />
+                  <span className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--cp-accent-bg)' }}>
+                    <Check size={16} style={{ color: 'var(--cp-accent-light, #a78bfa)' }} />
                   </span>
                 )}
               </div>
               <div className="flex items-center gap-2 mt-3">
                 <span
                   className="text-[0.65rem] font-semibold uppercase px-2 py-0.5 rounded-md"
-                  style={{ background: 'rgba(255,255,255,0.06)', color: '#94a3b8' }}
+                  style={{ background: 'var(--cp-surface-1)', color: 'var(--cp-text-muted)' }}
                 >
                   {t.category}
                 </span>
-                <span className="text-[0.65rem] font-medium" style={{ color: '#475569' }}>
+                <span className="text-[0.65rem] font-medium" style={{ color: 'var(--cp-text-faint)' }}>
                   {t.layout === 'two-column' ? 'Two column' : 'Single column'}
                 </span>
               </div>
@@ -86,7 +86,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
                     setPreviewId(t.id);
                   }}
                   className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[0.75rem] font-semibold"
-                  style={{ background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.25)', color: '#22d3ee' }}
+                  style={{ background: 'var(--cp-info-muted)', border: '1px solid rgba(56,189,248,0.25)', color: 'var(--cp-info, #22d3ee)' }}
                 >
                   <Eye size={14} />
                   Preview
@@ -98,7 +98,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
                     onSelect(t.id);
                   }}
                   className="rounded-xl px-3 py-1.5 text-[0.75rem] font-semibold"
-                  style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.35)', color: '#c4b5fd' }}
+                  style={{ background: 'var(--cp-accent-bg)', border: '1px solid var(--cp-border-accent)', color: 'var(--cp-accent-light, #c4b5fd)' }}
                 >
                   Use template
                 </button>
@@ -110,7 +110,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
 
       <Dialog open={!!previewId} onOpenChange={open => !open && setPreviewId(null)}>
         <DialogContent
-          className="max-h-[90vh] overflow-y-auto sm:max-w-3xl"
+          className="max-h-[90vh] overflow-y-auto"
           style={{ fontFamily: "'Space Grotesk', sans-serif", background: 'var(--cp-bg-card-solid)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)' }}
         >
           <DialogHeader>
@@ -122,7 +122,7 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
             </DialogDescription>
           </DialogHeader>
           {previewId && (
-            <div className="rounded-2xl p-4" style={{ background: 'rgba(255,255,255,0.04)' }}>
+            <div className="rounded-2xl p-4 cp-panel-nested">
               <ResumePreview doc={previewDoc} templateId={previewId} previewMode="desktop" exportRootId={`modal-preview-${previewId}`} />
             </div>
           )}
@@ -130,16 +130,15 @@ export function TemplateGallery({ selectedId, onSelect, previewDoc }: TemplateGa
             <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                className="rounded-xl px-4 py-2 text-sm font-semibold"
-                style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0' }}
+                className="rounded-xl px-4 py-2 text-sm font-semibold cp-panel-nested"
+                style={{ color: 'var(--cp-text-primary)' }}
                 onClick={() => setPreviewId(null)}
               >
                 Close
               </button>
               <button
                 type="button"
-                className="rounded-xl px-4 py-2 text-sm font-semibold"
-                style={{ background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', border: 'none', color: 'white' }}
+                className="rounded-xl px-4 py-2 text-sm font-semibold btn-primary"
                 onClick={() => {
                   if (previewId) onSelect(previewId);
                   setPreviewId(null);

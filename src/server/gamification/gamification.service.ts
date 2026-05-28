@@ -16,18 +16,18 @@ const isoDay = {
   },
 };
 
-/** Streak advances at most once per UTC calendar day of activity. */
+  /** Streak advances at most once per UTC calendar day of activity. */
 export function computeNextStreak(args: {
   lastActiveDate: string | null | undefined;
   today: string;
   yesterday: string;
   currentStreak: number;
-}): number {
+}): { streak: number; streakStartedAt: string | null } {
   const { lastActiveDate, today, yesterday, currentStreak } = args;
-  if (!lastActiveDate) return 1;
-  if (lastActiveDate === today) return currentStreak;
-  if (lastActiveDate === yesterday) return currentStreak + 1;
-  return 1;
+  if (!lastActiveDate) return { streak: 1, streakStartedAt: today };
+  if (lastActiveDate === today) return { streak: Math.max(currentStreak, 1), streakStartedAt: null };
+  if (lastActiveDate === yesterday) return { streak: Math.max(currentStreak, 0) + 1, streakStartedAt: null };
+  return { streak: 1, streakStartedAt: today };
 }
 
 const earnedBadgesSchema = z.preprocess(
@@ -47,6 +47,8 @@ const snapshotSchema = z
     xp: z.number().int().nonnegative().default(0),
     streak: z.number().int().nonnegative().default(0),
     lastActiveDate: z.string().nullable().optional().default(null),
+    /** UTC day when the current streak run began (reset on missed day). */
+    streakStartedAt: z.string().nullable().optional().default(null),
     /** YYYY-MM-DD (UTC) of last daily bonus claim — prevents duplicate +25 XP. */
     lastDailyClaimDate: z.string().nullable().optional().default(null),
     earnedBadges: earnedBadgesSchema.optional().default({}),
@@ -61,6 +63,7 @@ function parseSnapshot(snapshot: unknown): GamificationSnapshot {
     xp: 0,
     streak: 0,
     lastActiveDate: null,
+    streakStartedAt: null,
     lastDailyClaimDate: null,
     earnedBadges: {},
   };
@@ -78,6 +81,11 @@ function buildBadgesFromSnapshot(args: { snap: GamificationSnapshot }): Badge[] 
     ...b,
     earnedAt: earned[b.id] != null ? String(earned[b.id]) : null,
   }));
+}
+
+async function mergedSnapshotPayload(userId: string, nextSnap: GamificationSnapshot): Promise<Prisma.InputJsonValue> {
+  const { mergeSnapshotWithGamification } = await import('@/server/services/analytics-history.service');
+  return mergeSnapshotWithGamification(userId, nextSnap);
 }
 
 function applyBadgeCriteria(args: {
@@ -153,7 +161,7 @@ export async function awardGamificationXp(args: {
 
   const snap = parseSnapshot(existing?.snapshot);
 
-  const nextStreak = computeNextStreak({
+  const nextStreakResult = computeNextStreak({
     lastActiveDate: snap.lastActiveDate,
     today,
     yesterday,
@@ -163,11 +171,13 @@ export async function awardGamificationXp(args: {
   const nextSnapBase: GamificationSnapshot = {
     ...snap,
     xp: snap.xp + amount,
-    streak: nextStreak,
+    streak: nextStreakResult.streak,
     lastActiveDate: today,
+    streakStartedAt: nextStreakResult.streakStartedAt ?? snap.streakStartedAt ?? today,
   };
 
   const { nextSnap } = applyBadgeCriteria({ snap: nextSnapBase, atsScore, nowIso });
+  const merged = await mergedSnapshotPayload(userId, nextSnap);
 
   await prisma.$transaction(async tx => {
     await tx.userAnalytics.upsert({
@@ -175,10 +185,10 @@ export async function awardGamificationXp(args: {
       create: {
         userId,
         lastActiveAt: now,
-        snapshot: nextSnap as Prisma.InputJsonValue,
+        snapshot: merged,
       },
       update: {
-        snapshot: nextSnap as Prisma.InputJsonValue,
+        snapshot: merged,
         lastActiveAt: now,
       },
     });
@@ -197,6 +207,9 @@ export async function awardGamificationXp(args: {
 
   // Invalidate cached user hydration.
   void cacheService.invalidateUser(userId);
+  void import('@/server/services/analytics-history.service').then(({ appendXpHistoryPoint }) =>
+    appendXpHistoryPoint(userId, nextSnap.xp),
+  );
 
   return {
     xp: nextSnap.xp,
@@ -204,6 +217,85 @@ export async function awardGamificationXp(args: {
     badges: buildBadgesFromSnapshot({ snap: nextSnap }),
     awarded: true,
   };
+}
+
+/** Deduct XP for AI feature usage. Idempotent via actionKey. */
+export async function spendGamificationXp(args: {
+  userId: string;
+  amount: number;
+  actionKey: string;
+  actionType: string;
+}): Promise<{ xp: number; spent: boolean; required: number }> {
+  const { userId, amount, actionKey, actionType } = args;
+  if (amount <= 0) {
+    const snap = parseSnapshot(
+      (await prisma.userAnalytics.findUnique({ where: { userId }, select: { snapshot: true } }))?.snapshot,
+    );
+    return { xp: snap.xp, spent: false, required: amount };
+  }
+
+  const dup = await prisma.gamificationEvent.findUnique({
+    where: { userId_actionKey: { userId, actionKey } },
+  });
+  if (dup) {
+    const snap = parseSnapshot(
+      (await prisma.userAnalytics.findUnique({ where: { userId }, select: { snapshot: true } }))?.snapshot,
+    );
+    return { xp: snap.xp, spent: false, required: amount };
+  }
+
+  const existing = await prisma.userAnalytics.findUnique({
+    where: { userId },
+    select: { snapshot: true },
+  });
+  const snap = parseSnapshot(existing?.snapshot);
+
+  if (snap.xp < amount) {
+    const { insufficientXp } = await import('@/server/errors/http-error');
+    const { XP_EARN_SUGGESTIONS } = await import('@/lib/gamification/xp-costs');
+    throw insufficientXp('Not enough XP for this action', {
+      required: amount,
+      balance: snap.xp,
+      suggestions: XP_EARN_SUGGESTIONS,
+    });
+  }
+
+  const nextSnap: GamificationSnapshot = { ...snap, xp: snap.xp - amount };
+  const merged = await mergedSnapshotPayload(userId, nextSnap);
+
+  await prisma.$transaction(async tx => {
+    await tx.userAnalytics.upsert({
+      where: { userId },
+      create: {
+        userId,
+        lastActiveAt: new Date(),
+        snapshot: merged,
+      },
+      update: {
+        snapshot: merged,
+      },
+    });
+    await tx.gamificationEvent.create({
+      data: {
+        userId,
+        actionKey,
+        actionType,
+        xpAmount: -amount,
+      },
+    });
+  });
+
+  void cacheService.invalidateUser(userId);
+
+  return { xp: nextSnap.xp, spent: true, required: amount };
+}
+
+export async function getGamificationXpBalance(userId: string): Promise<number> {
+  const row = await prisma.userAnalytics.findUnique({
+    where: { userId },
+    select: { snapshot: true },
+  });
+  return parseSnapshot(row?.snapshot).xp;
 }
 
 const DAILY_BONUS_XP = 25;
@@ -245,7 +337,7 @@ export async function claimDailyBonus(userId: string): Promise<{
     };
   }
 
-  const nextStreak = computeNextStreak({
+  const nextStreakResult = computeNextStreak({
     lastActiveDate: snap.lastActiveDate,
     today,
     yesterday,
@@ -255,27 +347,32 @@ export async function claimDailyBonus(userId: string): Promise<{
   const nextSnapBase: GamificationSnapshot = {
     ...snap,
     xp: snap.xp + DAILY_BONUS_XP,
-    streak: nextStreak,
+    streak: nextStreakResult.streak,
     lastActiveDate: today,
     lastDailyClaimDate: today,
+    streakStartedAt: nextStreakResult.streakStartedAt ?? snap.streakStartedAt ?? today,
   };
 
   const { nextSnap } = applyBadgeCriteria({ snap: nextSnapBase, atsScore, nowIso });
+  const merged = await mergedSnapshotPayload(userId, nextSnap);
 
   await prisma.userAnalytics.upsert({
     where: { userId },
     create: {
       userId,
       lastActiveAt: now,
-      snapshot: nextSnap as Prisma.InputJsonValue,
+      snapshot: merged,
     },
     update: {
-      snapshot: nextSnap as Prisma.InputJsonValue,
+      snapshot: merged,
       lastActiveAt: now,
     },
   });
 
   void cacheService.invalidateUser(userId);
+  void import('@/server/services/analytics-history.service').then(({ appendXpHistoryPoint }) =>
+    appendXpHistoryPoint(userId, nextSnap.xp),
+  );
 
   return {
     claimed: true,
@@ -307,9 +404,10 @@ export async function recomputeGamificationBadgesForUser(userId: string): Promis
   const { nextSnap } = applyBadgeCriteria({ snap, atsScore, nowIso });
   if (JSON.stringify(nextSnap) === JSON.stringify(snap)) return;
 
+  const merged = await mergedSnapshotPayload(userId, nextSnap);
   await prisma.userAnalytics.update({
     where: { userId },
-    data: { snapshot: nextSnap as Prisma.InputJsonValue },
+    data: { snapshot: merged },
   });
 
   void cacheService.invalidateUser(userId);
@@ -331,6 +429,7 @@ export async function getGamificationFromSnapshot(args: {
       xp: 0,
       streak: 0,
       lastActiveDate: null,
+      streakStartedAt: null,
       lastDailyClaimDate: null,
       earnedBadges: {},
     };
@@ -342,9 +441,10 @@ export async function getGamificationFromSnapshot(args: {
   const { nextSnap, changed } = applyBadgeCriteria({ snap, atsScore: args.latestResumeAtsScore, nowIso });
 
   if (changed) {
+    const merged = await mergedSnapshotPayload(userId, nextSnap);
     await prisma.userAnalytics.update({
       where: { userId },
-      data: { snapshot: nextSnap as Prisma.InputJsonValue },
+      data: { snapshot: merged },
     });
     void cacheService.invalidateUser(userId);
   }

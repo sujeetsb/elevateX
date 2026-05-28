@@ -1,4 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
+import { apiFetchJson } from '@/lib/api/client';
+import { insightsQueryKeys } from '@/lib/insights/query-keys';
 
 export type WeeklyStudyHoursResponse = {
   days: Array<{ day: string; hours: number }>;
@@ -7,25 +9,19 @@ export type WeeklyStudyHoursResponse = {
   targetWeeklyHours: number | null;
 };
 
-export function useWeeklyStudyHours() {
+export function useWeeklyStudyHours(enabled = true) {
   return useQuery<WeeklyStudyHoursResponse>({
-    queryKey: ['analytics', 'weekly-study-hours'],
+    queryKey: insightsQueryKeys.weeklyStudy(),
     queryFn: async () => {
-      const res = await fetch('/api/v1/analytics/weekly-study-hours', { credentials: 'include' });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (json?.error && typeof json.error.message === 'string' && json.error.message)
-          || 'Could not load weekly study hours.',
-        );
-      }
-      return (json?.data ?? {
+      const data = await apiFetchJson<WeeklyStudyHoursResponse>('/api/v1/analytics/weekly-study-hours');
+      return data ?? {
         days: [],
         averageHoursPerDay: 0,
         weeklyStudyHours: 0,
         targetWeeklyHours: null,
-      }) as WeeklyStudyHoursResponse;
+      };
     },
     staleTime: 60_000,
+    enabled,
   });
 }

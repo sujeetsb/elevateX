@@ -10,6 +10,8 @@ export const dynamic = 'force-dynamic';
 
 const bodySchema = z.object({
   amount: z.number().int().min(1).max(50_000),
+  actionKey: z.string().min(1).max(200).optional(),
+  actionType: z.string().min(1).max(80).optional(),
 });
 
 export async function POST(req: Request) {
@@ -21,7 +23,12 @@ export async function POST(req: Request) {
 
     const body = bodySchema.parse(await req.json());
 
-    const gamification = await awardGamificationXp({ userId: session.user.id, amount: body.amount });
+    const gamification = await awardGamificationXp({
+      userId: session.user.id,
+      amount: body.amount,
+      actionKey: body.actionKey,
+      actionType: body.actionType,
+    });
 
     return NextResponse.json({ ok: true, data: gamification });
   } catch (e) {

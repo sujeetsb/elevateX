@@ -33,6 +33,7 @@ type SalaryIntelligenceProps = {
   salaryCurrency?: string;
   country?: string;
   profileVersion?: number;
+  isPro?: boolean;
   className?: string;
 };
 
@@ -50,6 +51,7 @@ export function SalaryIntelligence({
   salaryCurrency = 'USD',
   country,
   profileVersion = 0,
+  isPro = false,
   className = '',
 }: SalaryIntelligenceProps) {
   const router = useRouter();
@@ -142,7 +144,7 @@ export function SalaryIntelligence({
         <SalaryCharts data={data} locale={locale} compact={compact} formatChartValue={formatChartValue} />
       )}
 
-      {!data?.premium && (
+      {!isPro && !data?.premium && (
         <div className="rounded-2xl p-3 mb-4 flex items-center gap-2" style={{ background: 'rgba(124,58,237,0.1)', border: '1px dashed rgba(124,58,237,0.35)' }}>
           <Lock size={16} color="#a78bfa" />
           <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>

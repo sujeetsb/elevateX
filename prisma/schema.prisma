@@ -95,6 +95,7 @@ model User {
   courseCertificates  CourseCertificate[]
   optimizedResumes      OptimizedResume[]
   generatedCoverLetters GeneratedCoverLetter[]
+  interviewPreps        JobInterviewPrep[]
 }
 
 model Profile {
@@ -111,6 +112,8 @@ model Profile {
   preferredIndustries  String[]  @default([])
   themePreference      String?   @default("system")
   salaryExpectation    String?
+  salaryGoalCurrency   String?  @default("USD")
+  salaryGoalFrequency  String?  @default("Annual")
   currentSalary        String?
   salaryCurrency       String?  @default("USD")
   salaryFrequency      String?  @default("Annual")
@@ -288,6 +291,7 @@ model Job {
   applications JobApplication[]
   optimizedResumes OptimizedResume[]
   generatedCoverLetters GeneratedCoverLetter[]
+  interviewPreps   JobInterviewPrep[]
 
   @@unique([source, externalId])
   @@index([company])
@@ -783,6 +787,28 @@ model GeneratedCoverLetter {
   id        String   @id @default(cuid())
   userId    String
   jobId     String
+  content   Json
+  pdfUrl    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, jobId])
+  @@index([userId])
+  @@index([userId, jobId])
+  @@index([createdAt])
+}
+
+// ─── Job interview preparation (PRO) ────────────────────────────
+
+model JobInterviewPrep {
+  id        String   @id @default(cuid())
+  userId    String
+  jobId     String
+  jobTitle  String
+  company   String?
   content   Json
   pdfUrl    String?
   createdAt DateTime @default(now())

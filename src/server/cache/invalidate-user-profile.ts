@@ -7,5 +7,6 @@ export async function invalidateUserProfileCache(userId: string) {
     cacheKeys.userProfile(userId),
     cacheKeys.jobRecommendations(userId),
     cacheKeys.learningRecommendations(userId),
+    cacheKeys.profileAnalytics(userId),
   );
 }

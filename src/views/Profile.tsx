@@ -15,9 +15,11 @@ import {
   ProfileAppliedJobsTab,
   ProfileResumesTab,
 } from '../components/profile/ProfileExtraTabs';
+import { RecommendedSkillsPanel } from '../components/profile/RecommendedSkillsPanel';
 import { SubscriptionUpgradeModal } from '../components/SubscriptionUpgradeModal';
 import { isProTierClient } from '@/lib/subscription/tier';
 import { getAtsMessage } from '@/lib/ats/messaging';
+import { formatAtsScore, hasAtsScore } from '@/lib/ats/display';
 
 function ProfileRingSmall({ completion, color = '#7c3aed' }: { completion: number; color?: string }) {
   const r = 28;
@@ -87,6 +89,8 @@ export function Profile() {
     preferredIndustry: user.preferredIndustry,
     careerGoal: user.careerGoal,
     salaryGoal: user.salaryGoal,
+    salaryGoalCurrency: user.salaryGoalCurrency || 'USD',
+    salaryGoalFrequency: user.salaryGoalFrequency || 'Annual',
   });
   const [careerSaving, setCareerSaving] = useState(false);
   const [careerError, setCareerError] = useState('');
@@ -245,9 +249,9 @@ export function Profile() {
       <div className="section-pad mb-5">
         <div className="responsive-grid-3">
           {[
-            { label: 'ATS Score', value: `${atsScore}`, icon: '🎯', path: '/app/ats', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b' },
-            { label: 'Analytics', value: 'View', icon: '📊', path: '/app/analytics', color: '#a78bfa' },
-            { label: 'AI Mentor', value: 'Chat', icon: '🤖', path: '/app/mentor', color: '#06b6d4' },
+            { label: 'ATS Score', value: hasAtsScore(atsScore) ? formatAtsScore(atsScore) : 'Analyze', icon: '🎯', path: '/app/ats', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b' },
+            { label: 'Analytics', value: 'View', icon: '📊', path: '/app/analytics?from=profile', color: '#a78bfa' },
+            { label: 'Elevate Mentor', value: 'Chat', icon: '🤖', path: '/app/mentor', color: '#06b6d4' },
           ].map(item => (
             <button
               key={item.label}
@@ -261,6 +265,24 @@ export function Profile() {
           ))}
         </div>
       </div>
+
+      {!hasAtsScore(atsScore) && !isHydrating && (
+        <div className="section-pad mb-5">
+          <div className="glass-card rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex-1">
+              <p style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.9rem' }}>{atsMsg.headline}</p>
+              <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '4px' }}>{atsMsg.body}</p>
+            </div>
+            <button
+              onClick={() => router.push('/app/ats')}
+              className="px-4 py-2 rounded-xl font-semibold text-sm shrink-0"
+              style={{ background: 'var(--cp-accent)', color: 'var(--cp-text-inverse)' }}
+            >
+              Analyze Resume
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tab bar */}
       <div className="section-pad mb-4 overflow-x-auto">
@@ -353,6 +375,8 @@ export function Profile() {
                         preferredIndustry: user.preferredIndustry,
                         careerGoal: user.careerGoal,
                         salaryGoal: user.salaryGoal,
+                        salaryGoalCurrency: user.salaryGoalCurrency || 'USD',
+                        salaryGoalFrequency: user.salaryGoalFrequency || 'Annual',
                       });
                       setEditingCareer(true);
                     }}
@@ -372,7 +396,7 @@ export function Profile() {
                     { key: 'experience', label: 'Experience', placeholder: 'e.g. 3 years' },
                     { key: 'education', label: 'Education', placeholder: 'e.g. B.Tech Computer Science' },
                     { key: 'preferredIndustry', label: 'Industry', placeholder: 'e.g. Technology' },
-                    { key: 'salaryGoal', label: 'Salary Goal', placeholder: 'e.g. 2000000' },
+                    { key: 'salaryGoal', label: 'Expected Salary', placeholder: 'e.g. 2000000' },
                   ] as { key: keyof typeof careerDraft; label: string; placeholder: string }[]).map(f => (
                     <div key={f.key}>
                       <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>{f.label}</label>
@@ -384,6 +408,31 @@ export function Profile() {
                       />
                     </div>
                   ))}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>Goal Currency</label>
+                      <select
+                        value={careerDraft.salaryGoalCurrency}
+                        onChange={e => setCareerDraft(p => ({ ...p, salaryGoalCurrency: e.target.value }))}
+                        className="cp-input mt-1 w-full text-sm"
+                      >
+                        {['USD', 'INR', 'EUR', 'GBP'].map(c => (
+                          <option key={c} value={c}>{c}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>Goal Salary Type</label>
+                      <select
+                        value={careerDraft.salaryGoalFrequency}
+                        onChange={e => setCareerDraft(p => ({ ...p, salaryGoalFrequency: e.target.value }))}
+                        className="cp-input mt-1 w-full text-sm"
+                      >
+                        <option value="Annual">Annual</option>
+                        <option value="Monthly">Monthly</option>
+                      </select>
+                    </div>
+                  </div>
                   <div>
                     <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>Career Goal</label>
                     <textarea
@@ -437,7 +486,12 @@ export function Profile() {
                     { label: 'Experience', value: user.experience || '—' },
                     { label: 'Education', value: user.education || '—' },
                     { label: 'Industry', value: user.preferredIndustry || '—' },
-                    { label: 'Salary Goal', value: user.salaryGoal || '—' },
+                    {
+                      label: 'Salary Goal',
+                      value: user.salaryGoal
+                        ? `${user.salaryGoalCurrency === 'INR' ? '₹' : user.salaryGoalCurrency === 'EUR' ? '€' : user.salaryGoalCurrency === 'GBP' ? '£' : '$'}${Number(user.salaryGoal).toLocaleString()} (${user.salaryGoalFrequency})`
+                        : '—',
+                    },
                     { label: 'Career Goal', value: user.careerGoal || '—' },
                   ].map(d => (
                     <div key={d.label} className="flex items-start justify-between gap-3">
@@ -998,31 +1052,7 @@ export function Profile() {
             </div>
 
             {/* Missing skills recommendations */}
-            <div className="glass-card rounded-3xl p-5 mt-4">
-              <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '4px' }}>Recommended to Learn</h3>
-              <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginBottom: '16px' }}>Based on your target role</p>
-              {['GraphQL', 'Jest/Cypress', 'AWS Fundamentals', 'System Design', 'Docker'].map((skill, i) => (
-                !user.skills.includes(skill) && (
-                  <div key={skill} className="flex items-center gap-3 mb-3 last:mb-0">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center"
-                      style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
-                      <span style={{ fontSize: '0.85rem' }}>⚡</span>
-                    </div>
-                    <div className="flex-1">
-                      <div style={{ color: 'var(--cp-text-primary)', fontSize: '0.85rem' }}>{skill}</div>
-                      <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>High demand for {user.targetRole}</div>
-                    </div>
-                    <button
-                      onClick={() => { updateProfile({ skills: [...user.skills, skill] }); addXP(10); }}
-                      className="rounded-xl px-3 py-1.5"
-                      style={{ background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', color: '#a78bfa', fontSize: '0.75rem', fontWeight: 600 }}
-                    >
-                      + Add
-                    </button>
-                  </div>
-                )
-              ))}
-            </div>
+            <RecommendedSkillsPanel />
           </motion.div>
         )}
       </AnimatePresence>

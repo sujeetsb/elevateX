@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Upload,
   Zap,
@@ -19,10 +21,15 @@ import {
 } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, Radar, ResponsiveContainer } from 'recharts';
 import { getAtsMessage } from '@/lib/ats/messaging';
+import { formatAtsScore, hasAtsScore } from '@/lib/ats/display';
 import { useGame } from '../components/GameContext';
 import { useRouter } from 'next/navigation';
 import type { AISuggestion, OptimizeMode, ResumeDocument, ResumeTemplateId, WizardStep } from '../lib/resume/types';
-import { buildInitialResumeFromProfile, generateSuggestions, applyOptimizeMode } from '../lib/resume/mockAi';
+import { buildInitialResumeFromProfile, generateSuggestions } from '../lib/resume/mockAi';
+import { useResumeStudioOptimizeMutation } from '@/lib/hooks/use-resume-studio-optimize';
+import { LowXpAlert } from '@/components/LowXpAlert';
+import { getXpCost } from '@/lib/gamification/xp-costs';
+import { apiFetch, apiFetchJson, ApiError } from '@/lib/api/client';
 import { saveResumeToLibrary, appendOptimizationHistory } from '../lib/resume/storage';
 import { ResumePreview } from '../components/resume-builder/ResumePreview';
 import { TemplateGallery } from '../components/resume-builder/TemplateGallery';
@@ -39,22 +46,26 @@ import {
   validateLocalResumeFile,
 } from '@/lib/resume/resume-client-pipeline';
 import { mapResumeParsedJsonToOnboardingPrefill } from '@/lib/onboarding/map-resume-parsed-json';
+import { useResumesMeta, type ResumeMetaRow } from '@/lib/hooks/use-salary-insights';
+import { useResumeDocumentAutosave } from '@/lib/hooks/use-resume-autosave';
+import { invalidateInsightsQueries, insightsQueryKeys } from '@/lib/insights/query-keys';
+import type { UserProfile } from '../components/GameContext';
 
 const DEFAULT_ATS_CATEGORIES = [
-  { name: 'Keywords',   score: 65, max: 100, color: '#7c3aed', tip: 'Upload or paste your resume to get personalized keyword analysis.' },
+  { name: 'Keywords', score: 65, max: 100, color: '#7c3aed', tip: 'Upload or paste your resume to get personalized keyword analysis.' },
   { name: 'Formatting', score: 70, max: 100, color: '#10b981', tip: 'Run ATS analysis to check formatting compatibility.' },
   { name: 'Experience', score: 60, max: 100, color: '#06b6d4', tip: 'Run analysis to see how your experience section scores.' },
-  { name: 'Skills',     score: 55, max: 100, color: '#a78bfa', tip: 'Upload your resume to get skill gap analysis.' },
-  { name: 'Education',  score: 70, max: 100, color: '#f59e0b', tip: 'Run analysis to evaluate your education section.' },
-  { name: 'Impact',     score: 50, max: 100, color: '#f43f5e', tip: 'Add quantified achievements to improve your impact score.' },
+  { name: 'Skills', score: 55, max: 100, color: '#a78bfa', tip: 'Upload your resume to get skill gap analysis.' },
+  { name: 'Education', score: 70, max: 100, color: '#f59e0b', tip: 'Run analysis to evaluate your education section.' },
+  { name: 'Impact', score: 50, max: 100, color: '#f43f5e', tip: 'Add quantified achievements to improve your impact score.' },
 ];
 
 const DEFAULT_IMPROVEMENTS = [
-  { priority: 'high',   text: 'Upload your resume to get AI-powered, personalized ATS insights.', impact: 'Unlock analysis', icon: '🤖' },
-  { priority: 'high',   text: 'Add quantified achievements with numbers and metrics.',             impact: '+8–12 pts',      icon: '📊' },
-  { priority: 'medium', text: 'Include a 3-line professional summary aligned to your target role.', impact: '+6–10 pts',   icon: '📝' },
-  { priority: 'medium', text: 'Incorporate role-specific keywords from job descriptions.',          impact: '+5–8 pts',     icon: '🔑' },
-  { priority: 'low',    text: 'Standardize date formats and formatting consistency.',               impact: '+2–4 pts',     icon: '📅' },
+  { priority: 'high', text: 'Upload your resume to get AI-powered, personalized ATS insights.', impact: 'Unlock analysis', icon: '🤖' },
+  { priority: 'high', text: 'Add quantified achievements with numbers and metrics.', impact: '+8–12 pts', icon: '📊' },
+  { priority: 'medium', text: 'Include a 3-line professional summary aligned to your target role.', impact: '+6–10 pts', icon: '📝' },
+  { priority: 'medium', text: 'Incorporate role-specific keywords from job descriptions.', impact: '+5–8 pts', icon: '🔑' },
+  { priority: 'low', text: 'Standardize date formats and formatting consistency.', impact: '+2–4 pts', icon: '📅' },
 ];
 
 const PRIORITY_ICONS: Record<string, string> = {
@@ -81,16 +92,16 @@ function buildAtsCategoriesFromParsed(parsed: Record<string, unknown> | null): A
   }
   function tip(key: string, def: string): string {
     return (deepSections?.[key] as { comment?: string } | undefined)?.comment ??
-           (sections?.[key] as { comment?: string } | undefined)?.comment ?? def;
+      (sections?.[key] as { comment?: string } | undefined)?.comment ?? def;
   }
 
   return [
-    { name: 'Keywords',   score: pick('keywords', 65),   max: 100, color: '#7c3aed', tip: tip('keywords', 'Add role-specific keywords from job descriptions.') },
+    { name: 'Keywords', score: pick('keywords', 65), max: 100, color: '#7c3aed', tip: tip('keywords', 'Add role-specific keywords from job descriptions.') },
     { name: 'Formatting', score: pick('formatting', 72), max: 100, color: '#10b981', tip: tip('formatting', 'Use clean single-column formatting for ATS compatibility.') },
     { name: 'Experience', score: pick('experience', 68), max: 100, color: '#06b6d4', tip: tip('experience', 'Strengthen bullet points with action verbs and metrics.') },
-    { name: 'Skills',     score: pick('skills', 60),     max: 100, color: '#a78bfa', tip: tip('skills', 'List technical and domain skills relevant to your target role.') },
-    { name: 'Education',  score: pick('education', 70),  max: 100, color: '#f59e0b', tip: tip('education', 'Include your degree, institution, and graduation year.') },
-    { name: 'Impact',     score: pick('impact', 55),     max: 100, color: '#f43f5e', tip: tip('impact', 'Add metrics: percentages, dollar amounts, or timeframes.') },
+    { name: 'Skills', score: pick('skills', 60), max: 100, color: '#a78bfa', tip: tip('skills', 'List technical and domain skills relevant to your target role.') },
+    { name: 'Education', score: pick('education', 70), max: 100, color: '#f59e0b', tip: tip('education', 'Include your degree, institution, and graduation year.') },
+    { name: 'Impact', score: pick('impact', 55), max: 100, color: '#f43f5e', tip: tip('impact', 'Add metrics: percentages, dollar amounts, or timeframes.') },
   ];
 }
 
@@ -210,9 +221,32 @@ function buildSyntheticResumeText(
     .slice(0, 100_000);
 }
 
+function hydrateDocFromResume(latest: ResumeMetaRow, user: UserProfile): ResumeDocument {
+  const parsed = latest.parsedJson as Record<string, unknown> | null;
+  const studio = parsed?.studioDocument as ResumeDocument | undefined;
+  if (studio && typeof studio === 'object' && studio.personal) return studio;
+
+  const prefill = mapResumeParsedJsonToOnboardingPrefill(parsed);
+  return buildInitialResumeFromProfile({
+    ...user,
+    currentRole: prefill.currentRole || user.currentRole,
+    targetRole: prefill.targetRole || user.targetRole,
+    experience: prefill.experience || user.experience,
+    skills: prefill.skills?.length ? prefill.skills : user.skills,
+    education: prefill.education || user.education,
+    bio: prefill.summary || user.bio,
+    linkedIn: prefill.linkedIn || user.linkedIn,
+    certifications: user.certifications.map(c => c.name),
+  });
+}
+
 export function ATSOptimizer() {
   const router = useRouter();
-  const { user, atsScore, setAtsScore, addXP, updateProfile, refresh } = useGame();
+  const queryClient = useQueryClient();
+  const { user, xp, atsScore, setAtsScore, addXP, updateProfile, refresh, isHydrating } = useGame();
+  const { data: resumesMeta = [], isLoading: resumesMetaLoading } = useResumesMeta(!isHydrating);
+  const studioOptimize = useResumeStudioOptimizeMutation();
+  const studioXpCost = getXpCost('RESUME_OPTIMIZE');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingResumeIdRef = useRef<string | null>(null);
 
@@ -223,67 +257,13 @@ export function ATSOptimizer() {
   const [analyzeBusy, setAnalyzeBusy] = useState(false);
   const [autoLoadedResume, setAutoLoadedResume] = useState<{ id: string; title: string } | null>(null);
   const [autoLoadError, setAutoLoadError] = useState<string | null>(null);
-
-  // Auto-load latest resume from DB on mount
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/resumes', { credentials: 'include' });
-        if (!res.ok) return;
-        const json = await res.json();
-        const resumes = Array.isArray(json?.data) ? json.data : [];
-        const latest = resumes.find(
-          (r: { parseStatus?: string; parsedJson?: unknown }) => r.parseStatus === 'COMPLETE' && r.parsedJson,
-        ) as { id: string; title: string; parsedJson: Record<string, unknown> } | undefined;
-        if (!latest) return;
-
-        const parsed = latest.parsedJson as Record<string, unknown>;
-        pendingResumeIdRef.current = latest.id;
-        setHasPendingUploadedResume(true);
-        setAutoLoadedResume({ id: latest.id, title: latest.title ?? 'Resume' });
-
-        const cats = buildAtsCategoriesFromParsed(parsed);
-        setParsedIntelligence(parsed);
-
-        // Auto-generate suggestions from parsed resume
-        const prefill = mapResumeParsedJsonToOnboardingPrefill(parsed);
-        if (prefill.summary?.trim()) {
-          setResumeText(prev => (prev.trim() ? prev : prefill.summary!.trim()));
-        }
-
-        const doc = buildInitialResumeFromProfile({
-          ...user,
-          currentRole: prefill.currentRole || user.currentRole,
-          targetRole: prefill.targetRole || user.targetRole,
-          experience: prefill.experience || user.experience,
-          skills: prefill.skills?.length ? prefill.skills : user.skills,
-          education: prefill.education || user.education,
-          bio: prefill.summary || user.bio,
-          linkedIn: prefill.linkedIn || user.linkedIn,
-          certifications: user.certifications.map(c => c.name),
-        });
-        const suggestionList = generateSuggestions(doc);
-        setResumeDoc(doc);
-        setSuggestions(suggestionList);
-
-        // Show ATS data without re-upload
-        if (cats.length) {
-          setWizardStep('ats');
-        }
-      } catch {
-        setAutoLoadError('Could not auto-load your resume.');
-      }
-    })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  const [activeResumeId, setActiveResumeId] = useState<string | null>(null);
   const [wizardStep, setWizardStep] = useState<WizardStep>('upload');
   const [tab, setTab] = useState<'score' | 'improve' | 'radar'>('score');
   const [resumeText, setResumeText] = useState('');
   const [targetRoleDraft, setTargetRoleDraft] = useState(user.targetRole || 'Senior Software Engineer');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [parsedIntelligence, setParsedIntelligence] = useState<Record<string, unknown> | null>(null);
-
   const [resumeDoc, setResumeDoc] = useState<ResumeDocument | null>(null);
   const [templateId, setTemplateId] = useState<ResumeTemplateId>('modern-saas');
   const [suggestions, setSuggestions] = useState<AISuggestion[]>([]);
@@ -291,6 +271,118 @@ export function ATSOptimizer() {
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop');
   const [mobileStudioTab, setMobileStudioTab] = useState<'edit' | 'preview' | 'ai'>('edit');
   const [scoreBeforeStudio, setScoreBeforeStudio] = useState<number | null>(null);
+  const [autoHydrated, setAutoHydrated] = useState(false);
+  const [studioXpError, setStudioXpError] = useState<{ required: number; balance: number } | null>(null);
+
+  const { status: autosaveStatus, validationIssues } = useResumeDocumentAutosave(
+    wizardStep === 'editor' ? activeResumeId : null,
+    wizardStep === 'editor' ? resumeDoc : null,
+  );
+
+  // Auto-load latest parsed resume — meta=1 omits parsedJson, so fetch detail when needed
+  useEffect(() => {
+    if (autoHydrated || isHydrating) return;
+
+    const shouldTryLoad =
+      user.resumeUploaded ||
+      hasAtsScore(atsScore) ||
+      resumesMeta.some(r => r.parseStatus === 'COMPLETE' || (r.atsScore != null && r.atsScore > 0));
+
+    if (!shouldTryLoad && resumesMetaLoading) return;
+    if (!shouldTryLoad) return;
+
+    setWizardStep(prev => (prev === 'upload' ? 'analyzing' : prev));
+
+    void (async () => {
+      try {
+        const pickCandidate = (rows: ResumeMetaRow[]) =>
+          rows.find(r => r.parseStatus === 'COMPLETE') ??
+          rows.find(r => r.atsScore != null && r.atsScore > 0) ??
+          null;
+
+        let candidate = pickCandidate(resumesMeta);
+
+        if (!candidate && !resumesMetaLoading) {
+          const fullList = await apiFetchJson<ResumeMetaRow[]>('/api/v1/resumes');
+          candidate = pickCandidate(Array.isArray(fullList) ? fullList : []);
+        }
+
+        if (!candidate) {
+          if (hasAtsScore(atsScore) && user.resumeUploaded) {
+            setWizardStep('ats');
+            setAutoHydrated(true);
+          } else {
+            setWizardStep('upload');
+          }
+          return;
+        }
+
+        type ResumeDetail = {
+          resumeId: string;
+          parseStatus: string;
+          atsScore: number | null;
+          parsedJson?: Record<string, unknown> | null;
+        };
+
+        let parsed = candidate.parsedJson as Record<string, unknown> | null | undefined;
+        let score = candidate.atsScore;
+
+        if (!parsed && candidate.parseStatus === 'COMPLETE') {
+          const detail = await apiFetchJson<ResumeDetail>(
+            `/api/v1/resumes/${encodeURIComponent(candidate.id)}`,
+          );
+          parsed = detail?.parsedJson ?? null;
+          score = detail?.atsScore ?? score;
+        }
+
+        const hasAnalysis =
+          candidate.parseStatus === 'COMPLETE' ||
+          hasAtsScore(score) ||
+          hasAtsScore(atsScore);
+
+        if (!hasAnalysis) {
+          setWizardStep('upload');
+          return;
+        }
+
+        const hydratedRow: ResumeMetaRow = { ...candidate, parsedJson: parsed ?? null, atsScore: score };
+
+        pendingResumeIdRef.current = candidate.id;
+        setActiveResumeId(candidate.id);
+        setHasPendingUploadedResume(true);
+        setAutoLoadedResume({ id: candidate.id, title: candidate.title ?? 'Resume' });
+
+        if (parsed && typeof parsed === 'object') {
+          setParsedIntelligence(parsed);
+          const prefill = mapResumeParsedJsonToOnboardingPrefill(parsed);
+          if (prefill.summary?.trim()) {
+            setResumeText(prev => (prev.trim() ? prev : prefill.summary!.trim()));
+          }
+        }
+
+        const doc = hydrateDocFromResume(hydratedRow, user);
+        setResumeDoc(doc);
+        setSuggestions(generateSuggestions(doc));
+
+        if (score != null && Number.isFinite(Number(score))) {
+          setAtsScore(Number(score));
+        } else if (hasAtsScore(atsScore)) {
+          setAtsScore(atsScore);
+        }
+
+        setAutoHydrated(true);
+        setWizardStep('ats');
+      } catch {
+        setAutoLoadError('Could not auto-load your resume.');
+        if (hasAtsScore(atsScore)) {
+          setWizardStep('ats');
+          setAutoHydrated(true);
+        } else {
+          setWizardStep('upload');
+        }
+      }
+    })();
+  }, [resumesMeta, resumesMetaLoading, autoHydrated, isHydrating, user, atsScore, setAtsScore]);
 
   const handleUtFilesComplete = useCallback(async (res: unknown[]) => {
     const file = Array.isArray(res) ? res[0] : null;
@@ -429,7 +521,7 @@ export function ATSOptimizer() {
       const nextAts =
         polled.atsScore != null && Number.isFinite(polled.atsScore)
           ? Math.min(100, Math.round(polled.atsScore))
-          : Math.min(95, atsScore + 6);
+          : Math.min(95, (atsScore ?? 55) + 6);
       setAtsScore(nextAts);
 
       const doc = buildInitialResumeFromProfile({
@@ -452,18 +544,23 @@ export function ATSOptimizer() {
       addXP(250);
       setWizardStep('ats');
       setTab('score');
-      pendingResumeIdRef.current = null;
+      pendingResumeIdRef.current = resumeId;
+      setActiveResumeId(resumeId);
       setHasPendingUploadedResume(false);
-      void refresh();
+      void invalidateInsightsQueries(queryClient);
+      void refresh({ silent: true, scope: 'me' });
+      toast.success('Resume analyzed successfully');
     } catch (e) {
-      setIngestError(e instanceof Error ? e.message : 'Analysis failed.');
+      const msg = e instanceof Error ? e.message : 'Analysis failed.';
+      setIngestError(msg);
+      toast.error('Analysis failed', { description: msg });
       setWizardStep('upload');
       setIngestPhase('idle');
       setHasPendingUploadedResume(false);
     } finally {
       setAnalyzeBusy(false);
     }
-  }, [resumeText, user, targetRoleDraft, atsScore, setAtsScore, addXP, updateProfile, refresh]);
+  }, [resumeText, user, targetRoleDraft, atsScore, setAtsScore, addXP, updateProfile, refresh, queryClient]);
 
   const onPickFiles = useCallback(
     async (list: FileList | null) => {
@@ -486,17 +583,30 @@ export function ATSOptimizer() {
     [startUpload],
   );
 
-  const runAiOptimization = (mode: OptimizeMode) => {
+  const runAiOptimization = async (mode: OptimizeMode) => {
+    if (!resumeDoc) return;
+    if (!activeResumeId) {
+      toast.error('Analyze your resume first before running AI optimization.');
+      return;
+    }
+    if (xp < studioXpCost) {
+      setStudioXpError({ required: studioXpCost, balance: xp });
+      return;
+    }
+    setStudioXpError(null);
     setOptimizeMode(mode);
     setWizardStep('ai-processing');
-    window.setTimeout(() => {
-      if (!resumeDoc) return;
-      const before = atsScore;
-      const nextDoc = applyOptimizeMode(resumeDoc, mode);
-      setResumeDoc(nextDoc);
-      setSuggestions(generateSuggestions(nextDoc));
-      const delta = mode === 'generate' ? 12 : mode === 'rewrite' ? 8 : 5;
-      const after = Math.min(98, before + delta);
+    try {
+      const result = await studioOptimize.mutateAsync({
+        resumeId: activeResumeId,
+        mode,
+        document: resumeDoc,
+        targetRole: targetRoleDraft || user.targetRole,
+      });
+      const before = result.atsScoreBefore ?? atsScore ?? 0;
+      const after = result.atsScoreAfter ?? atsScore ?? 0;
+      setResumeDoc(result.document);
+      setSuggestions(generateSuggestions(result.document));
       setAtsScore(after);
       appendOptimizationHistory({
         id: rid(),
@@ -506,22 +616,51 @@ export function ATSOptimizer() {
         templateId,
         createdAt: new Date().toISOString(),
       });
-      addXP(120);
+      void invalidateInsightsQueries(queryClient);
+      void queryClient.invalidateQueries({ queryKey: insightsQueryKeys.resumesMeta() });
+      void refresh({ silent: true, scope: 'me' });
+      toast.success('AI optimization complete', {
+        description: result.source === 'ai' ? 'Powered by Gemini' : 'Applied rule-based polish',
+      });
       setWizardStep('editor');
       setMobileStudioTab('preview');
-    }, 2600);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : 'AI optimization failed. Try again.';
+      if (e instanceof ApiError && e.code === 'INSUFFICIENT_XP') {
+        setStudioXpError({ required: studioXpCost, balance: xp });
+      }
+      toast.error(msg);
+      setWizardStep('optimize-mode');
+    }
   };
 
-  const handleSaveLibrary = () => {
+  const handleSaveLibrary = async () => {
     if (!resumeDoc) return;
     saveResumeToLibrary({
       id: rid(),
       name: `${user.name.split(' ')[0] || 'Resume'} · ${templateId}`,
       templateId,
-      atsScoreSnapshot: atsScore,
+      atsScoreSnapshot: atsScore ?? 0,
       updatedAt: new Date().toISOString(),
       document: resumeDoc,
     });
+    if (activeResumeId) {
+      const result = await apiFetch(`/api/v1/resumes/${encodeURIComponent(activeResumeId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          studioDocument: resumeDoc,
+          title: `${user.name.split(' ')[0] || 'Resume'} · ${templateId}`,
+        }),
+      });
+      if (result.ok) {
+        toast.success('Resume saved to your library');
+        void queryClient.invalidateQueries({ queryKey: insightsQueryKeys.resumesMeta() });
+      } else {
+        toast.error(result.error.message);
+      }
+    } else {
+      toast.success('Saved locally');
+    }
   };
 
   const handleExportPdf = async () => {
@@ -537,17 +676,18 @@ export function ATSOptimizer() {
     await exportResumeToDocx(resumeDoc, `${user.name.replace(/\s+/g, '_')}_resume`);
   };
 
-  const scoreColor = atsScore >= 80 ? '#10b981' : atsScore >= 60 ? '#f59e0b' : '#f43f5e';
-  const scoreLabel = atsScore >= 80 ? 'Excellent' : atsScore >= 70 ? 'Good' : atsScore >= 60 ? 'Fair' : 'Needs Work';
+  const scoreVal = atsScore ?? 0;
+  const scoreColor = scoreVal >= 80 ? '#10b981' : scoreVal >= 60 ? '#f59e0b' : '#f43f5e';
+  const scoreLabel = scoreVal >= 80 ? 'Excellent' : scoreVal >= 70 ? 'Good' : scoreVal >= 60 ? 'Fair' : 'Needs Work';
 
   const atsCategories = useMemo(() => buildAtsCategoriesFromParsed(parsedIntelligence), [parsedIntelligence]);
-  const improvements  = useMemo(() => buildImprovementsFromParsed(parsedIntelligence), [parsedIntelligence]);
-  const radarData     = useMemo(() => atsCategories.map(c => ({ category: c.name, value: c.score })), [atsCategories]);
+  const improvements = useMemo(() => buildImprovementsFromParsed(parsedIntelligence), [parsedIntelligence]);
+  const radarData = useMemo(() => atsCategories.map(c => ({ category: c.name, value: c.score })), [atsCategories]);
 
   // Summary line from AI analysis
   const analysisSummary = parsedIntelligence
     ? ((parsedIntelligence.atsDeepAnalysis as Record<string, unknown> | undefined)?.summary ??
-       (parsedIntelligence.analyzerReport as Record<string, unknown> | undefined)?.summary_comment) as string | undefined
+      (parsedIntelligence.analyzerReport as Record<string, unknown> | undefined)?.summary_comment) as string | undefined
     : undefined;
 
   const chipIdx = resumeStudioChipIndex(wizardStep);
@@ -708,7 +848,7 @@ export function ATSOptimizer() {
                     ? 'Saving & parsing resume…'
                     : 'Drop a file here or tap to browse'}
               </p>
-              <p style={{ color: 'var(--cp-text-faint)', fontSize: '0.78rem' }}>PDF, DOC, DOCX, or TXT · up to 10MB</p>
+              <p style={{ color: 'var(--cp-text-faint)', fontSize: '0.78rem' }}>PDF, DOCX, or TXT · up to 10MB</p>
               <div className="mt-4 flex flex-col items-center gap-2" onClick={e => e.stopPropagation()}>
                 <ResumeUploadButton
                   endpoint="resume"
@@ -805,22 +945,22 @@ export function ATSOptimizer() {
             >
               <div className="absolute top-0 right-0 w-32 h-32 rounded-full opacity-5" style={{ background: `radial-gradient(circle, ${scoreColor}, transparent)`, transform: 'translate(20%, -20%)' }} />
               <div className="flex justify-center mb-2">
-                <ScoreGauge score={atsScore} />
+                <ScoreGauge score={scoreVal} />
               </div>
               <div style={{ color: scoreColor, fontWeight: 700, fontSize: '1rem' }}>{scoreLabel}</div>
               {analysisSummary ? (
                 <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '6px', lineHeight: 1.5, maxWidth: '340px', margin: '6px auto 0' }}>{String(analysisSummary)}</p>
               ) : (
-                <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '4px' }}>Beat {atsScore > 72 ? '65%' : '45%'} of applicants in your field</div>
+                <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem', marginTop: '4px' }}>Beat {scoreVal > 72 ? '65%' : '45%'} of applicants in your field</div>
               )}
               <div className="flex justify-around mt-4 pt-4" style={{ borderTop: '1px solid var(--cp-border)' }}>
                 {(() => {
                   const msg = getAtsMessage(atsScore);
                   const target = msg.band === 'excellent' ? '90+' : '90';
-                  const gap = msg.band === 'excellent' ? 0 : Math.max(90 - atsScore, 0);
+                  const gap = msg.band === 'excellent' ? 0 : Math.max(90 - scoreVal, 0);
                   return [
                     { label: 'Target', value: target, color: '#10b981' },
-                    { label: 'Current', value: `${atsScore}`, color: scoreColor },
+                    { label: 'Current', value: hasAtsScore(atsScore) ? formatAtsScore(atsScore) : '—', color: scoreColor },
                     { label: msg.band === 'excellent' ? 'Status' : 'Gap', value: msg.band === 'excellent' ? '✓' : `${gap}`, color: msg.band === 'excellent' ? '#10b981' : '#f59e0b' },
                   ];
                 })().map(s => (
@@ -928,7 +1068,7 @@ export function ATSOptimizer() {
                   </div>
                   <motion.button
                     type="button"
-                    onClick={handleAnalyze}
+                    onClick={() => void handleAnalyze()}
                     whileTap={{ scale: 0.97 }}
                     className="w-full mt-5 py-4 rounded-2xl flex items-center justify-center gap-3"
                     style={{ background: 'linear-gradient(135deg, #7c3aed, #06b6d4)', border: 'none', color: 'white', fontWeight: 700, fontSize: '1rem' }}
@@ -1033,7 +1173,10 @@ export function ATSOptimizer() {
       {wizardStep === 'optimize-mode' && resumeDoc && (
         <div className="section-pad mb-8">
           <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: 8 }}>3 · How should AI optimize?</h3>
-          <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.82rem', marginBottom: 20 }}>Polish keeps your voice; rewrite restructures bullets; generate creates an executive-ready narrative.</p>
+          <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.82rem', marginBottom: 20 }}>
+            Polish keeps your voice; rewrite restructures bullets; generate creates an executive-ready narrative. Costs {studioXpCost} XP per pass.
+          </p>
+          {studioXpError && <LowXpAlert {...studioXpError} className="mb-4" />}
           <div className="grid grid-cols-1 gap-3">
             {(
               [
@@ -1048,7 +1191,8 @@ export function ATSOptimizer() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.06 }}
-                onClick={() => runAiOptimization(m.id)}
+                onClick={() => void runAiOptimization(m.id)}
+                disabled={studioOptimize.isPending}
                 className="text-left rounded-2xl p-5 glass-card"
                 style={{ border: '1px solid rgba(124,58,237,0.25)' }}
               >
@@ -1091,11 +1235,16 @@ export function ATSOptimizer() {
 
       {/* Editor + preview + AI */}
       {wizardStep === 'editor' && resumeDoc && (
-        <div className="section-pad pb-10">
+        <div className="section-pad" style={{ paddingBottom: 'max(2.5rem, calc(env(safe-area-inset-bottom, 0px) + 6rem))' }}>
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
               <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Resume studio</h3>
-              <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>Live preview · inline edits · AI suggestions</p>
+              <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>
+                Live preview · inline edits · AI suggestions
+                {autosaveStatus === 'saving' && ' · Saving…'}
+                {autosaveStatus === 'saved' && ' · Saved'}
+                {autosaveStatus === 'error' && ' · Save failed — retry by editing'}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -1127,6 +1276,12 @@ export function ATSOptimizer() {
             </div>
           </div>
 
+          {validationIssues.length > 0 && (
+            <div className="rounded-xl px-3 py-2 mb-3 text-xs" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', color: '#fbbf24' }}>
+              {validationIssues.slice(0, 3).join(' · ')}
+            </div>
+          )}
+
           <div className="flex rounded-2xl p-1 mb-4 lg:hidden" style={{ background: 'var(--cp-bg-card)' }}>
             {(
               [
@@ -1153,11 +1308,8 @@ export function ATSOptimizer() {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            <div className={`lg:col-span-5 ${mobileStudioTab === 'edit' ? 'block' : 'hidden'} lg:block`}>
-              <ResumeEditor doc={resumeDoc} onChange={setResumeDoc} />
-            </div>
-            <div className={`lg:col-span-4 ${mobileStudioTab === 'preview' ? 'block' : 'hidden'} lg:block`}>
-              <div className="lg:sticky lg:top-4 space-y-3">
+            <div className={`lg:col-span-6 ${mobileStudioTab === 'preview' ? 'block' : 'block'} lg:block`}>
+              <div className="">
                 <ResumePreview
                   doc={resumeDoc}
                   templateId={templateId}
@@ -1198,7 +1350,11 @@ export function ATSOptimizer() {
                 </motion.button>
               </div>
             </div>
-            <div className={`lg:col-span-3 ${mobileStudioTab === 'ai' ? 'block' : 'hidden'} lg:block`}>
+            <div className={`lg:col-span-6 ${mobileStudioTab === 'edit' ? 'block' : 'hidden'} lg:block`}>
+              <ResumeEditor doc={resumeDoc} onChange={setResumeDoc} />
+            </div>
+
+            <div className={`lg:col-span-6 ${mobileStudioTab === 'ai' ? 'block' : 'hidden'} lg:block`}>
               <div className="lg:sticky lg:top-4">
                 <AISuggestionsPanel
                   suggestions={suggestions}
@@ -1230,7 +1386,7 @@ export function ATSOptimizer() {
               onClick={() => setWizardStep('optimize-mode')}
               className="rounded-xl px-5 py-3 font-semibold"
               style={{ background: 'rgba(124,58,237,0.2)', border: '1px solid rgba(124,58,237,0.35)', color: '#ddd6fe' }}
-              >
+            >
               Run AI again
             </button>
           </div>

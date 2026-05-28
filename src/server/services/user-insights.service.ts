@@ -50,11 +50,15 @@ function fallbackInsights(ctx: {
   salaryExpectation: string;
   salaryCurrency: string;
   salaryFrequency: string;
+  salaryGoalCurrency: string;
+  salaryGoalFrequency: string;
   country: string;
   locationPreference: string;
 }): UserInsightsPayload {
   const target = ctx.targetRole || 'Senior Professional';
   const salaryUnit = ctx.salaryFrequency || 'Annual';
+  const goalUnit = ctx.salaryGoalFrequency || ctx.salaryFrequency || 'Annual';
+  const goalCurrency = ctx.salaryGoalCurrency || ctx.salaryCurrency || 'USD';
   const location = ctx.locationPreference || ctx.country || 'your market';
   return {
     careerGoals: [
@@ -85,7 +89,7 @@ function fallbackInsights(ctx: {
         : undefined,
       roleAverage: `Market average for ${ctx.currentRole || 'your role'} in ${location}`,
       futureRoleSalary: ctx.salaryExpectation
-        ? `${ctx.salaryExpectation} (${ctx.salaryCurrency || 'USD'} ${salaryUnit})`
+        ? `${ctx.salaryExpectation} (${goalCurrency} ${goalUnit})`
         : `Higher band for ${target}`,
       fiveYearProjection: 'Projected progression based on your current role and growth path.',
       industryBenchmark: `Benchmarked for ${ctx.industry || 'your industry'} roles in ${location}`,
@@ -145,6 +149,8 @@ async function buildInsightContext(userId: string) {
   const salaryExpectation = profile?.salaryExpectation ?? '';
   const salaryCurrency = profile?.salaryCurrency ?? '';
   const salaryFrequency = profile?.salaryFrequency ?? '';
+  const salaryGoalCurrency = profile?.salaryGoalCurrency ?? salaryCurrency;
+  const salaryGoalFrequency = profile?.salaryGoalFrequency ?? salaryFrequency;
   const country = profile?.country ?? '';
   const locationPreference = profile?.locationPreference ?? '';
 
@@ -161,6 +167,8 @@ async function buildInsightContext(userId: string) {
     locationPreference: profile?.locationPreference,
     currentSalary: profile?.currentSalary,
     salaryExpectation: profile?.salaryExpectation,
+    salaryGoalCurrency: profile?.salaryGoalCurrency,
+    salaryGoalFrequency: profile?.salaryGoalFrequency,
     salaryCurrency: profile?.salaryCurrency,
     salaryFrequency: profile?.salaryFrequency,
     compensationType: profile?.compensationType,
@@ -182,6 +190,8 @@ async function buildInsightContext(userId: string) {
     salaryExpectation,
     salaryCurrency,
     salaryFrequency,
+    salaryGoalCurrency,
+    salaryGoalFrequency,
     country,
     locationPreference,
     sourceHash,
@@ -212,6 +222,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
     salaryExpectation,
     salaryCurrency,
     salaryFrequency,
+    salaryGoalCurrency,
+    salaryGoalFrequency,
     country,
     locationPreference,
     sourceHash,
@@ -276,6 +288,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
           salaryExpectation,
           salaryCurrency: salaryCurrency || locale.currency,
           salaryFrequency: salaryFrequency || locale.salaryType,
+          salaryGoalCurrency: salaryGoalCurrency || locale.currency,
+          salaryGoalFrequency: salaryGoalFrequency || locale.salaryType,
           country,
           locationPreference,
         }),
@@ -291,6 +305,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
           salaryExpectation,
           salaryCurrency: salaryCurrency || locale.currency,
           salaryFrequency: salaryFrequency || locale.salaryType,
+          salaryGoalCurrency: salaryGoalCurrency || locale.currency,
+          salaryGoalFrequency: salaryGoalFrequency || locale.salaryType,
           country,
           locationPreference,
         }).careerGoals,
@@ -308,6 +324,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
           salaryExpectation,
           salaryCurrency: salaryCurrency || locale.currency,
           salaryFrequency: salaryFrequency || locale.salaryType,
+          salaryGoalCurrency: salaryGoalCurrency || locale.currency,
+          salaryGoalFrequency: salaryGoalFrequency || locale.salaryType,
           country,
           locationPreference,
         }).careerPath,
@@ -325,6 +343,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
         salaryExpectation,
         salaryCurrency: salaryCurrency || locale.currency,
         salaryFrequency: salaryFrequency || locale.salaryType,
+        salaryGoalCurrency: salaryGoalCurrency || locale.currency,
+        salaryGoalFrequency: salaryGoalFrequency || locale.salaryType,
         country,
         locationPreference,
       });
@@ -341,6 +361,8 @@ export async function generateUserInsights(userId: string, opts?: { force?: bool
       salaryExpectation,
       salaryCurrency: salaryCurrency || locale.currency,
       salaryFrequency: salaryFrequency || locale.salaryType,
+      salaryGoalCurrency: salaryGoalCurrency || locale.currency,
+      salaryGoalFrequency: salaryGoalFrequency || locale.salaryType,
       country,
       locationPreference,
     });

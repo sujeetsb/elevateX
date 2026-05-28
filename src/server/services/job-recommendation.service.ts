@@ -180,7 +180,10 @@ export async function getRankedJobsForUser(userId: string): Promise<RankedJob[]>
   const industry = insightIndustry || profile?.preferredIndustry || '';
   const userIsTech = roleIsTech(currentRole) || roleIsTech(target) || roleIsTech(industry);
   const salaryFloorAnnual = parseSalaryToAnnual(profile?.currentSalary, profile?.salaryCurrency);
-  const salaryTargetAnnual = parseSalaryToAnnual(profile?.salaryExpectation, profile?.salaryCurrency);
+  const salaryTargetAnnual = parseSalaryToAnnual(
+    profile?.salaryExpectation,
+    profile?.salaryGoalCurrency ?? profile?.salaryCurrency,
+  );
 
   const jobs = await prisma.job.findMany({
     where: { deletedAt: null },

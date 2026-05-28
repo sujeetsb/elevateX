@@ -1,6 +1,7 @@
 import { prisma } from '@/server/db/prisma';
 import { getSession } from '@/server/http/get-session';
 import { unauthorized, notFound } from '@/server/errors/http-error';
+import { kickStuckResumeParse } from '@/server/services/resume-parse-runner.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,12 +51,17 @@ export async function GET(req: Request) {
             parseError: true,
             atsScore: true,
             lastParsedAt: true,
+            createdAt: true,
           },
         });
 
         if (!resume) {
           send({ type: 'error', message: 'Resume not found' });
           break;
+        }
+
+        if (resume.parseStatus === 'PENDING' && i === 0) {
+          void kickStuckResumeParse(resumeId, resume.createdAt);
         }
 
         const { stage, percent } = mapProgress(resume.parseStatus);

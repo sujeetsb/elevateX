@@ -42,6 +42,8 @@ const profileSchema = z.object({
   preferredIndustries: z.array(z.string().min(1).max(160)).max(3).optional(),
   themePreference: z.enum(['dark', 'light', 'system']).optional(),
   salaryExpectation: z.string().max(160).optional(),
+  salaryGoalCurrency: z.enum(['INR', 'USD', 'EUR', 'GBP']).optional(),
+  salaryGoalFrequency: z.enum(['Monthly', 'Annual']).optional(),
   currentSalary: z.string().max(64).optional(),
   salaryCurrency: z.enum(['INR', 'USD', 'EUR', 'GBP']).optional(),
   salaryFrequency: z.enum(['Monthly', 'Annual']).optional(),
@@ -112,6 +114,21 @@ export async function PATCH(req: Request) {
     }
 
     await invalidateUserProfileCache(session.user.id);
+
+    const salaryTouched =
+      profileFields.currentSalary !== undefined ||
+      profileFields.salaryExpectation !== undefined ||
+      profileFields.salaryCurrency !== undefined ||
+      profileFields.salaryGoalCurrency !== undefined;
+    if (salaryTouched && finalProfile) {
+      const { appendSalaryHistoryPoint } = await import('@/server/services/analytics-history.service');
+      await appendSalaryHistoryPoint(session.user.id, {
+        current: finalProfile.currentSalary,
+        goal: finalProfile.salaryExpectation,
+        currency: finalProfile.salaryCurrency ?? 'USD',
+        goalCurrency: finalProfile.salaryGoalCurrency ?? finalProfile.salaryCurrency ?? 'USD',
+      });
+    }
 
     const today = new Date().toISOString().slice(0, 10);
     await awardGamificationXp({

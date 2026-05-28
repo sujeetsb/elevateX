@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { Bell, Moon, Sun, Monitor, Flame, Zap, Target, TrendingUp, ChevronRight, Star, Brain, ArrowUpRight } from 'lucide-react';
@@ -11,9 +11,13 @@ import { SalaryIntelligence } from '../components/SalaryIntelligence';
 import { listRecentResumes, listOptimizationHistory, getTemplateUsageStats } from '../lib/resume/storage';
 import type { OptimizationHistoryEntry, SavedResumeMeta } from '../lib/resume/types';
 import { getAtsDashboardInsight, getAtsActiveInsight, getAtsMessage } from '@/lib/ats/messaging';
+import { formatAtsScore, hasAtsScore } from '@/lib/ats/display';
 import { SubscriptionUpgradeModal } from '../components/SubscriptionUpgradeModal';
 import { isProTierClient } from '@/lib/subscription/tier';
 import { getTemplateMeta } from '../lib/resume/templates';
+import { useResumesMeta } from '@/lib/hooks/use-salary-insights';
+import { useProfileInsights } from '@/lib/hooks/use-profile-insights';
+import { buildSkillRadarFromInsights } from '@/lib/insights/normalize';
 
 /** DB resume row (lightweight) returned by GET /api/v1/resumes */
 interface DbResumeMeta {
@@ -32,7 +36,7 @@ const weeklyData = [
   { day: 'Thu', xp: 350 }, { day: 'Fri', xp: 220 }, { day: 'Sat', xp: 400 }, { day: 'Sun', xp: 310 },
 ];
 
-const skillRadarData = [
+const skillRadarFallback = [
   { skill: 'React', value: 88 }, { skill: 'TypeScript', value: 75 }, { skill: 'Node.js', value: 60 },
   { skill: 'CSS', value: 85 }, { skill: 'Testing', value: 45 }, { skill: 'DevOps', value: 35 },
 ];
@@ -90,6 +94,8 @@ export function Dashboard() {
   const [recentResumes, setRecentResumes] = useState<SavedResumeMeta[]>([]);
   const [dbResumes, setDbResumes] = useState<DbResumeMeta[]>([]);
   const [dbResumesLoading, setDbResumesLoading] = useState(true);
+  const { data: resumesMeta = [], isLoading: resumesMetaLoading } = useResumesMeta(Boolean(user.email));
+  const { data: profileInsights } = useProfileInsights(user.profileVersion, Boolean(user.email));
   const [optHistory, setOptHistory] = useState<OptimizationHistoryEntry[]>([]);
   const [tplStats, setTplStats] = useState<Record<string, number>>({});
 
@@ -116,26 +122,19 @@ export function Dashboard() {
     setTplStats(getTemplateUsageStats());
   }, []);
 
-  // Fetch DB-persisted resumes so the dashboard always shows uploaded/parsed resumes
-  // even before the user manually saves them through the Resume Studio UI.
+  // DB resumes via React Query (shared cache with ATS studio)
   useEffect(() => {
-    if (!user.email) return;
-    setDbResumesLoading(true);
-    void (async () => {
-      try {
-        const res = await fetch('/api/v1/resumes?meta=1', { credentials: 'include' });
-        if (!res.ok) return;
-        const json = await res.json();
-        const list = Array.isArray(json?.data) ? (json.data as DbResumeMeta[]) : [];
-        // Only surface resumes that completed parsing successfully
-        setDbResumes(list.filter(r => r.parseStatus === 'COMPLETE'));
-      } catch {
-        // Non-fatal — local saved resumes still show
-      } finally {
-        setDbResumesLoading(false);
-      }
-    })();
-  }, [user.email]);
+    setDbResumesLoading(resumesMetaLoading);
+    setDbResumes(resumesMeta.filter(r => r.parseStatus === 'COMPLETE'));
+  }, [resumesMeta, resumesMetaLoading]);
+
+  const skillRadarData = useMemo(() => {
+    const fromInsights = buildSkillRadarFromInsights({
+      userSkills: user.skills,
+      skillsGap: profileInsights?.skillsGap ?? [],
+    });
+    return fromInsights.length >= 3 ? fromInsights : skillRadarFallback;
+  }, [user.skills, profileInsights?.skillsGap]);
 
   const atsMsg = getAtsMessage(atsScore);
   const aiMessages = [
@@ -292,7 +291,9 @@ export function Dashboard() {
               <div style={{ color: '#fbbf24', fontWeight: 600, fontSize: '0.9rem' }}>
                 {dailyClaimBusy ? 'Claiming…' : 'Claim Daily Reward'}
               </div>
-              <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>Day {streak + 1} of your streak!</div>
+              <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>
+                {streak > 0 ? `Day ${streak} of your streak!` : 'Start your streak today!'}
+              </div>
             </div>
             <div className="flex items-center gap-1">
               <Zap size={14} color="#f59e0b" />
@@ -306,7 +307,7 @@ export function Dashboard() {
       <div className="section-pad mb-4">
         <div className="responsive-grid-3">
           {[
-            { label: 'ATS Score', value: `${atsScore}`, unit: '/100', icon: '🎯', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b', path: '/app/ats' },
+            { label: 'ATS Score', value: hasAtsScore(atsScore) ? formatAtsScore(atsScore) : '—', unit: hasAtsScore(atsScore) ? '/100' : '', icon: '🎯', color: atsMsg.band === 'excellent' ? '#10b981' : atsMsg.band === 'good' ? '#06b6d4' : '#f59e0b', path: '/app/ats' },
             { label: 'Job Match', value: '87', unit: '%', icon: '💼', color: '#06b6d4', path: '/app/jobs' },
             { label: 'Courses', value: `${courses.length}`, unit: '', icon: '📚', color: '#a78bfa', path: '/app/courses' },
           ].map(stat => (
@@ -317,6 +318,45 @@ export function Dashboard() {
               </div>
               <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem' }}>{stat.label}</div>
             </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Job Matches — center prominence */}
+      <div className="section-pad mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Top Job Matches</h3>
+          <button onClick={() => router.push('/app/jobs')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>See all →</button>
+        </div>
+        <div className="space-y-3">
+          {(jobs.length > 0
+            ? jobs.slice(0, 3).map(job => ({
+              company: job.company,
+              role: job.title,
+              match: job.matchPercent,
+              logo: job.logo || '🏢',
+              salary: job.salary || 'Salary not listed',
+            }))
+            : [
+              { company: 'Notion', role: 'Frontend Engineer', match: 95, logo: '📝', salary: '$130k–$170k' },
+              { company: 'Vercel', role: 'React Developer', match: 92, logo: '▲', salary: '$140k–$180k' },
+            ]).map((job, i) => (
+            <motion.button
+              key={i}
+              onClick={() => router.push('/app/jobs')}
+              className="w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left"
+              whileTap={{ scale: 0.98 }}
+            >
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center glass-card text-lg">{job.logo}</div>
+              <div className="flex-1">
+                <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.85rem' }}>{job.role}</div>
+                <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>{job.company} · {job.salary}</div>
+              </div>
+              <div className="text-right">
+                <div style={{ color: '#10b981', fontWeight: 700, fontSize: '0.9rem' }}>{job.match}%</div>
+                <div style={{ color: 'var(--cp-text-faint)', fontSize: '0.68rem' }}>match</div>
+              </div>
+            </motion.button>
           ))}
         </div>
       </div>
@@ -378,6 +418,7 @@ export function Dashboard() {
           salaryCurrency={user.salaryCurrency}
           country={user.country}
           profileVersion={user.profileVersion}
+          isPro={isProTierClient(user.subscriptionTier)}
         />
       </div>
 
@@ -683,45 +724,6 @@ export function Dashboard() {
               <span style={{ color: 'var(--cp-text-faint)', fontSize: '0.6rem', textAlign: 'center' }}>{badges.filter(b => !b.earnedAt).length} locked</span>
             </div>
           </div>
-        </div>
-      </div>
-
-      {/* Job Matches quick view */}
-      <div className="section-pad mb-2">
-        <div className="flex items-center justify-between mb-3">
-          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700 }}>Top Job Matches</h3>
-          <button onClick={() => router.push('/app/jobs')} style={{ color: '#a78bfa', fontSize: '0.8rem', background: 'none', border: 'none', cursor: 'pointer' }}>See all →</button>
-        </div>
-        <div className="space-y-3">
-          {(jobs.length > 0
-            ? jobs.slice(0, 2).map(job => ({
-              company: job.company,
-              role: job.title,
-              match: job.matchPercent,
-              logo: job.logo || '🏢',
-              salary: job.salary || 'Salary not listed',
-            }))
-            : [
-              { company: 'Notion', role: 'Frontend Engineer', match: 95, logo: '📝', salary: '$130k–$170k' },
-              { company: 'Vercel', role: 'React Developer', match: 92, logo: '▲', salary: '$140k–$180k' },
-            ]).map((job, i) => (
-            <motion.button
-              key={i}
-              onClick={() => router.push('/app/jobs')}
-              className="w-full glass-card rounded-2xl p-4 flex items-center gap-3 text-left"
-              whileTap={{ scale: 0.98 }}
-            >
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center glass-card text-lg">{job.logo}</div>
-              <div className="flex-1">
-                <div style={{ color: 'var(--cp-text-primary)', fontWeight: 600, fontSize: '0.85rem' }}>{job.role}</div>
-                <div style={{ color: 'var(--cp-text-muted)', fontSize: '0.75rem' }}>{job.company} · {job.salary}</div>
-              </div>
-              <div className="text-right">
-                <div style={{ color: '#10b981', fontWeight: 700, fontSize: '0.9rem' }}>{job.match}%</div>
-                <div style={{ color: 'var(--cp-text-faint)', fontSize: '0.68rem' }}>match</div>
-              </div>
-            </motion.button>
-          ))}
         </div>
       </div>
 
