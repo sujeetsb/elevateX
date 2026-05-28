@@ -4,8 +4,9 @@ import { getSession } from '@/server/http/get-session';
 import { cacheService } from '@/server/cache/cache-service';
 import { cacheKeys } from '@/server/cache/cache-keys';
 import { handleApiError } from '@/server/errors/handler';
-import { unauthorized } from '@/server/errors/http-error';
+import { unauthorized, userNotRegistered } from '@/server/errors/http-error';
 import { getGamificationFromSnapshot } from '@/server/gamification/gamification.service';
+import { getLatestResumeForDisplay } from '@/server/services/latest-resume.service';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET() {
     const [user, profile, skills, analytics, latestResume, certifications] = await Promise.all([
       prisma.user.findUnique({
         where: { id: session.user.id },
-        select: { id: true, name: true, email: true, image: true, role: true, createdAt: true },
+        select: { id: true, name: true, email: true, image: true, role: true, createdAt: true, deletedAt: true, suspendedAt: true },
       }),
       prisma.profile.findUnique({ where: { userId: session.user.id } }),
       prisma.userSkill.findMany({
@@ -34,17 +35,17 @@ export async function GET() {
         where: { userId: session.user.id },
         select: { snapshot: true, lastActiveAt: true, jobViews: true, jobClicks: true, learningMinutes: true, aiTokensMonth: true },
       }),
-      prisma.resume.findFirst({
-        where: { userId: session.user.id, deletedAt: null },
-        orderBy: { updatedAt: 'desc' },
-        select: { id: true, parseStatus: true, parseVersion: true, atsScore: true, confidence: true, lastParsedAt: true, updatedAt: true },
-      }),
+      getLatestResumeForDisplay(session.user.id),
       prisma.userCertification.findMany({
         where: { userId: session.user.id },
         orderBy: { createdAt: 'desc' },
         select: { id: true, name: true, issuer: true, issueDate: true, expiryDate: true, credentialId: true, credentialUrl: true, createdAt: true },
       }),
     ]);
+
+    if (!user || user.deletedAt || user.suspendedAt) {
+      throw userNotRegistered();
+    }
 
     const [gamification, alreadyClaimedToday] = await (async () => {
       const gam = await getGamificationFromSnapshot({

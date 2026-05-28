@@ -11,11 +11,14 @@ import { DialogTitle } from '../components/ui/dialog';
 import { ResumeUploadButton } from '@/lib/uploadthing/components';
 import type { ResumeParseResult } from '@/types/resume-parse-result';
 import { mapResumeParsedJsonToOnboardingPrefill } from '@/lib/onboarding/map-resume-parsed-json';
+import { normalizeUserInsights } from '@/lib/insights/normalize';
+import { parseApiError } from '@/lib/api/client';
 import { validateResumeUpload } from '@/lib/resume/validate-upload';
 import { STORAGE_KEYS, APP_NAME } from '@/lib/brand';
 import { BrandLogo } from '@/components/BrandLogo';
 import { useSession } from 'next-auth/react';
 import { resolveSalaryLocale } from '@/lib/salary/locale';
+import { setRoutingCache } from '@/lib/auth/routing-cache';
 
 const PARSE_STATUS_LABELS: Record<string, string> = {
   PENDING: 'Queued for analysis…',
@@ -83,6 +86,9 @@ type DraftShape = {
   currentSalary: string;
   salaryType: string;
   salaryCurrency: string;
+  salaryGoal: string;
+  salaryGoalCurrency: string;
+  salaryGoalType: string;
   country: string;
 };
 
@@ -129,6 +135,8 @@ export function Onboarding() {
   const [resumeAnalyzed, setResumeAnalyzed] = useState(false);
   const [activeResumeId, setActiveResumeId] = useState<string | null>(null);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<{ ufsUrl: string; key: string; name: string; type: string } | null>(null);
+  const [awaitingResumeConfirm, setAwaitingResumeConfirm] = useState(false);
   const [aiPackLoading, setAiPackLoading] = useState(false);
 
   const [name, setName] = useState('');
@@ -145,6 +153,9 @@ export function Onboarding() {
   const [currentSalary, setCurrentSalary] = useState('');
   const [salaryType, setSalaryType] = useState('Annual');
   const [salaryCurrency, setSalaryCurrency] = useState('USD');
+  const [salaryGoal, setSalaryGoal] = useState('');
+  const [salaryGoalCurrency, setSalaryGoalCurrency] = useState('USD');
+  const [salaryGoalType, setSalaryGoalType] = useState('Annual');
   const [country, setCountry] = useState('');
   const [stepError, setStepError] = useState<string | null>(null);
 
@@ -176,6 +187,9 @@ export function Onboarding() {
       if (typeof d.currentSalary === 'string') setCurrentSalary(d.currentSalary);
       if (typeof d.salaryType === 'string') setSalaryType(d.salaryType);
       if (typeof d.salaryCurrency === 'string') setSalaryCurrency(d.salaryCurrency);
+      if (typeof d.salaryGoal === 'string') setSalaryGoal(d.salaryGoal);
+      if (typeof d.salaryGoalCurrency === 'string') setSalaryGoalCurrency(d.salaryGoalCurrency);
+      if (typeof d.salaryGoalType === 'string') setSalaryGoalType(d.salaryGoalType);
       if (typeof d.country === 'string') setCountry(d.country);
     }
     setDraftHydrated(true);
@@ -222,6 +236,9 @@ export function Onboarding() {
         currentSalary,
         salaryType,
         salaryCurrency,
+        salaryGoal,
+        salaryGoalCurrency,
+        salaryGoalType,
         country,
       });
     }, 450);
@@ -244,27 +261,30 @@ export function Onboarding() {
     currentSalary,
     salaryType,
     salaryCurrency,
+    salaryGoal,
+    salaryGoalCurrency,
+    salaryGoalType,
     country,
   ]);
 
   useEffect(() => {
     if (!draftHydrated) return;
-    setCountry(prev => prev.trim() || user.country || '');
-    setSalaryCurrency(prev => prev.trim() || user.salaryCurrency || 'USD');
-    setSalaryType(prev => prev.trim() || user.salaryFrequency || 'Annual');
+    setSalaryCurrency(prev => prev || user.salaryCurrency || 'USD');
+    setSalaryType(prev => prev || user.salaryFrequency || 'Annual');
     setCurrentSalary(prev => prev.trim() || user.currentSalary || '');
-  }, [draftHydrated, user.country, user.salaryCurrency, user.salaryFrequency, user.currentSalary]);
-
-  useEffect(() => {
-    if (!country.trim()) return;
-    const inferred = resolveSalaryLocale({ country, salaryCurrency: null }).currency;
-    setSalaryCurrency(inferred);
-  }, [country]);
+    setSalaryGoal(prev => prev.trim() || user.salaryGoal || '');
+    setSalaryGoalCurrency(prev => prev || user.salaryGoalCurrency || user.salaryCurrency || 'USD');
+    setSalaryGoalType(prev => prev || user.salaryGoalFrequency || user.salaryFrequency || 'Annual');
+  }, [draftHydrated, user.salaryCurrency, user.salaryFrequency, user.salaryGoalCurrency, user.salaryGoalFrequency, user.currentSalary, user.salaryGoal]);
 
   const salaryLocale = resolveSalaryLocale({
-    country,
     salaryCurrency,
     salaryFrequency: salaryType,
+  });
+
+  const goalSalaryLocale = resolveSalaryLocale({
+    salaryCurrency: salaryGoalCurrency,
+    salaryFrequency: salaryGoalType,
   });
 
   useEffect(() => {
@@ -272,6 +292,12 @@ export function Onboarding() {
       setSalaryType('Annual');
     }
   }, [salaryLocale.showMonthlyAndYearly, salaryType]);
+
+  useEffect(() => {
+    if (!goalSalaryLocale.showMonthlyAndYearly && salaryGoalType !== 'Annual') {
+      setSalaryGoalType('Annual');
+    }
+  }, [goalSalaryLocale.showMonthlyAndYearly, salaryGoalType]);
 
   const mergeParsed = useCallback((parsed: ResumeParseResult) => {
     // Quick-parse result: only fill fields that are currently empty (user may have typed already)
@@ -325,21 +351,17 @@ export function Onboarding() {
       const res = await fetch('/api/v1/insights', { credentials: 'include' });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(readApiError(json, 'Could not load career suggestions.'));
+        throw new Error(parseApiError(json, 'Could not load career suggestions.'));
       }
-      const insights = json?.data as Record<string, unknown> | null;
-      if (insights) {
-        const targetRoles = Array.isArray(insights.targetRoles) ? insights.targetRoles.map(String) : [];
-        const careerGoals = Array.isArray(insights.careerGoals) ? insights.careerGoals.map(String) : [];
-        const skillsGap = Array.isArray(insights.skillsGap)
-          ? (insights.skillsGap as Array<Record<string, unknown>>).map(x => String(x.skill ?? '')).filter(Boolean)
-          : [];
-        const recommendedCourses = Array.isArray(insights.recommendedCourses)
-          ? (insights.recommendedCourses as Array<Record<string, unknown>>).map(x => String(x.title ?? '')).filter(Boolean)
-          : [];
-        const pathStages = Array.isArray((insights.careerPath as Record<string, unknown> | undefined)?.stages)
-          ? (((insights.careerPath as Record<string, unknown>).stages as Array<Record<string, unknown>>).map(x => String(x.title ?? '')).filter(Boolean))
-          : [];
+      const normalized = normalizeUserInsights(json?.data);
+      if (normalized.recommendedSkills.length || normalized.targetRoles.length) {
+        const targetRoles = normalized.targetRoles;
+        const careerGoals = normalized.careerGoals;
+        const skillsGap = normalized.recommendedSkills;
+        const recommendedCourses = normalized.recommendedCourses.map(c => c.title);
+        const pathStages = (normalized.careerPath?.stages ?? [])
+          .map(s => String(s.title ?? ''))
+          .filter(Boolean);
 
         if (targetRoles[0]) setTargetRole(prev => prev.trim() || targetRoles[0]);
         if (careerGoals[0]) setCareerGoal(prev => prev.trim() || careerGoals[0]);
@@ -413,10 +435,13 @@ export function Onboarding() {
     setResumeAnalyzed(false);
     setActiveResumeId(null);
     setUploadedFileName(null);
+    setPendingUpload(null);
+    setAwaitingResumeConfirm(false);
     setUploadProgress(0);
     setResumeParseStatus(null);
     setResumeConfidence(null);
     setResumeError(null);
+    setResumeParsing(false);
   };
 
   const runResumePipelineFromUt = async (
@@ -432,7 +457,18 @@ export function Onboarding() {
       return;
     }
 
+    setPendingUpload(file);
+    setUploadedFileName(file.name);
+    setAwaitingResumeConfirm(true);
     setResumeError(null);
+    setResumeParseStatus(null);
+    setResumeConfidence(null);
+  };
+
+  const confirmResumeUpload = async () => {
+    if (!pendingUpload) return;
+    const file = pendingUpload;
+    setAwaitingResumeConfirm(false);
     setResumeParsing(true);
     setResumeConfidence(null);
     setResumeParseStatus(null);
@@ -490,6 +526,7 @@ export function Onboarding() {
       }
 
       setStep(1);
+      setPendingUpload(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not read that file. Try PDF, DOCX, or TXT.';
       setResumeError(msg);
@@ -654,7 +691,9 @@ export function Onboarding() {
       currentSalary: currentSalary.trim() || undefined,
       salaryCurrency: salaryCurrency || undefined,
       salaryFrequency: salaryType || undefined,
-      country: country.trim() || undefined,
+      salaryExpectation: salaryGoal.trim() || undefined,
+      salaryGoalCurrency: salaryGoalCurrency || undefined,
+      salaryGoalFrequency: salaryGoalType || undefined,
     };
     const snapshot = JSON.stringify(payload);
     if (snapshot === autosaveSnapshotRef.current) return;
@@ -687,7 +726,9 @@ export function Onboarding() {
     currentSalary,
     salaryCurrency,
     salaryType,
-    country,
+    salaryGoal,
+    salaryGoalCurrency,
+    salaryGoalType,
     refresh,
   ]);
 
@@ -724,7 +765,9 @@ export function Onboarding() {
           currentSalary: currentSalary.trim() || undefined,
           salaryCurrency: salaryCurrency || undefined,
           salaryFrequency: salaryType || undefined,
-          country: country.trim() || undefined,
+          salaryExpectation: salaryGoal.trim() || undefined,
+          salaryGoalCurrency: salaryGoalCurrency || undefined,
+          salaryGoalFrequency: salaryGoalType || undefined,
           bio: profileSummary.trim() || undefined,
           onboardingComplete: true,
         }),
@@ -738,6 +781,14 @@ export function Onboarding() {
 
       await updateSession({ onboardingComplete: true });
       markOnboarded();
+      if (session?.user?.id) {
+        setRoutingCache(session.user.id, {
+          authenticated: true,
+          registered: true,
+          onboardingComplete: true,
+          subscriptionTier: user.subscriptionTier,
+        });
+      }
       void refresh({ silent: true, force: true });
 
       try {
@@ -750,7 +801,7 @@ export function Onboarding() {
         // ignore
       }
 
-      addXP(500);
+      addXP(500, { actionKey: `onboarding-complete:${session?.user?.id ?? 'user'}`, actionType: 'ONBOARDING_COMPLETE' });
       setShowCelebration(true);
       redirectTimerRef.current = window.setTimeout(() => {
         window.location.replace('/app/dashboard');
@@ -1011,28 +1062,57 @@ export function Onboarding() {
                       {resumeUploaded && (
                         <div style={{ color: '#f59e0b', fontSize: '0.78rem', fontWeight: 600 }}>⚡ +100 XP earned</div>
                       )}
+                      {awaitingResumeConfirm && uploadedFileName && !resumeUploaded && (
+                        <div className="mt-3 rounded-xl p-3 space-y-3" style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.25)' }}>
+                          <p style={{ color: 'var(--cp-text-primary)', fontSize: '0.82rem', fontWeight: 600 }}>
+                            Use this resume for profile completion?
+                          </p>
+                          <p style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>{uploadedFileName}</p>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void confirmResumeUpload()}
+                              disabled={resumeParsing}
+                              className="flex-1 rounded-xl py-2 text-sm font-semibold btn-primary disabled:opacity-60"
+                            >
+                              {resumeParsing ? 'Parsing…' : 'Yes, parse resume'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={clearUploadedResume}
+                              disabled={resumeParsing}
+                              className="flex-1 rounded-xl py-2 text-sm font-semibold disabled:opacity-60"
+                              style={{ background: 'var(--cp-bg-card)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-muted)' }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {resumeUploaded && uploadedFileName && (
                         <div className="mt-2 flex items-center gap-2 flex-wrap">
                           <span style={{ color: 'var(--cp-text-muted)', fontSize: '0.78rem' }}>{uploadedFileName}</span>
-                          <button
-                            type="button"
-                            className="text-xs rounded-lg px-2 py-1"
-                            style={{ background: 'rgba(244,63,94,0.12)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.3)' }}
-                            onClick={clearUploadedResume}
-                          >
-                            Remove & re-upload
-                          </button>
+                          {!resumeParsing && (
+                            <button
+                              type="button"
+                              className="text-xs rounded-lg px-2 py-1"
+                              style={{ background: 'rgba(244,63,94,0.12)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.3)' }}
+                              onClick={clearUploadedResume}
+                            >
+                              Remove & re-upload
+                            </button>
+                          )}
                         </div>
                       )}
-                      {!resumeUploaded && (
+                      {!resumeUploaded && !awaitingResumeConfirm && !resumeParsing && (
                         <div className="mt-3 max-w-xs" onClick={e => e.stopPropagation()}>
                           <ResumeUploadButton
                             endpoint="resume"
-                            disabled={resumeParsing}
+                            disabled={resumeParsing || awaitingResumeConfirm}
                             onClientUploadComplete={res => void runResumePipelineFromUt(res)}
                             onUploadError={e => setResumeError(e.message)}
                             appearance={{
-                              button: 'bg-violet-600 hover:bg-violet-500 border-0 text-white rounded-xl px-4 py-2 text-sm font-semibold w-full',
+                              button: 'bg-violet-600 hover:bg-violet-500 border-0 text-white rounded-xl px-4 py-2 text-sm font-semibold w-full disabled:opacity-50',
                               allowedContent: 'text-xs mt-1 opacity-60',
                             }}
                             content={{ button: resumeParsing ? 'Working…' : 'Choose file' }}
@@ -1309,39 +1389,14 @@ export function Onboarding() {
                       })}
                     </div>
                   </div>
-                  <div className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div className="rounded-2xl p-3" style={{ background: 'var(--cp-surface-1)', border: '1px solid var(--cp-border-subtle)' }}>
                     <p style={{ color: 'var(--cp-text-primary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px' }}>
                       Current Salary
                     </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div>
                         <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
-                          Country
-                        </label>
-                        <input
-                          value={country}
-                          onChange={e => setCountry(e.target.value)}
-                          placeholder="India, United States..."
-                          className="w-full rounded-xl px-3 py-2 outline-none"
-                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
-                          Currency
-                        </label>
-                        <div
-                          className="w-full rounded-xl px-3 py-2"
-                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
-                        >
-                          {salaryLocale.symbol} {salaryCurrency}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
-                          Amount
+                          Salary
                         </label>
                         <input
                           value={currentSalary}
@@ -1350,6 +1405,21 @@ export function Onboarding() {
                           className="w-full rounded-xl px-3 py-2 outline-none"
                           style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
                         />
+                      </div>
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Currency
+                        </label>
+                        <select
+                          value={salaryCurrency}
+                          onChange={e => setSalaryCurrency(e.target.value)}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        >
+                          {['USD', 'INR', 'EUR', 'GBP'].map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
                       </div>
                       <div>
                         <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
@@ -1362,6 +1432,60 @@ export function Onboarding() {
                           style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
                         >
                           {salaryLocale.showMonthlyAndYearly ? (
+                            <>
+                              <option value="Monthly">Monthly</option>
+                              <option value="Annual">Annual</option>
+                            </>
+                          ) : (
+                            <option value="Annual">Annual</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl p-3" style={{ background: 'var(--cp-surface-1)', border: '1px solid var(--cp-border-subtle)' }}>
+                    <p style={{ color: 'var(--cp-text-primary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '8px' }}>
+                      Expected Salary Goal
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Expected Salary
+                        </label>
+                        <input
+                          value={salaryGoal}
+                          onChange={e => setSalaryGoal(e.target.value)}
+                          placeholder={salaryGoalCurrency === 'INR' ? '1800000' : '120000'}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Currency
+                        </label>
+                        <select
+                          value={salaryGoalCurrency}
+                          onChange={e => setSalaryGoalCurrency(e.target.value)}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        >
+                          {['USD', 'INR', 'EUR', 'GBP'].map(c => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ color: 'var(--cp-text-muted)', fontSize: '0.72rem', display: 'block', marginBottom: '6px' }}>
+                          Salary Type
+                        </label>
+                        <select
+                          value={salaryGoalType}
+                          onChange={e => setSalaryGoalType(e.target.value)}
+                          className="w-full rounded-xl px-3 py-2 outline-none"
+                          style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-primary)', fontSize: '0.84rem' }}
+                        >
+                          {goalSalaryLocale.showMonthlyAndYearly ? (
                             <>
                               <option value="Monthly">Monthly</option>
                               <option value="Annual">Annual</option>

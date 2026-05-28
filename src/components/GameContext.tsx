@@ -2,7 +2,10 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
-import { signOutUser } from '@/lib/auth/sign-out';
+import { signOutUser, signOutUnregistered } from '@/lib/auth/sign-out';
+import { getQueryClient } from '@/lib/query-client';
+import { invalidateInsightsQueries, insightsQueryKeys } from '@/lib/insights/query-keys';
+import { apiFetch, apiFetchJson, parseApiError } from '@/lib/api/client';
 import { normalizeCourse } from '@/lib/courses/normalize';
 import { STORAGE_KEYS } from '@/lib/brand';
 import { formatJobSalaryRange, resolveSalaryLocale } from '@/lib/salary/locale';
@@ -56,6 +59,8 @@ export interface UserProfile {
   github: string;
   bio: string;
   salaryGoal: string;
+  salaryGoalCurrency: string;
+  salaryGoalFrequency: string;
   currentSalary: string;
   salaryCurrency: string;
   salaryFrequency: string;
@@ -168,12 +173,14 @@ export interface RoadmapPlan {
   modules?: unknown[];
 }
 
+export type RefreshScope = 'all' | 'me' | 'jobs' | 'courses' | 'roadmap';
+
 interface GameContextType {
   user: UserProfile;
   isOnboarded: boolean;
   isAuthenticated: boolean;
   isHydrating: boolean;
-  refresh: (opts?: { silent?: boolean; force?: boolean }) => Promise<void>;
+  refresh: (opts?: { silent?: boolean; force?: boolean; scope?: RefreshScope }) => Promise<void>;
   markOnboarded: () => void;
   xp: number;
   level: number;
@@ -182,7 +189,7 @@ interface GameContextType {
   totalXpForNextLevel: number;
   streak: number;
   profileCompletion: number;
-  atsScore: number;
+  atsScore: number | null;
   badges: Badge[];
   courses: Course[];
   jobs: Job[];
@@ -195,9 +202,9 @@ interface GameContextType {
   /** True if the user has already claimed their daily bonus today (server-driven). */
   alreadyClaimedToday: boolean;
   signOut: () => Promise<void>;
-  addXP: (amount: number) => void;
+  addXP: (amount: number, opts?: { actionKey?: string; actionType?: string }) => void;
   updateProfile: (data: Partial<UserProfile>) => Promise<boolean>;
-  setAtsScore: (score: number) => void;
+  setAtsScore: (score: number | null) => void;
   completeLesson: (
     courseId: string,
     moduleId: string,
@@ -227,6 +234,8 @@ const initialUser: UserProfile = {
   github: '',
   bio: '',
   salaryGoal: '',
+  salaryGoalCurrency: 'USD',
+  salaryGoalFrequency: 'Annual',
   currentSalary: '',
   salaryCurrency: 'USD',
   salaryFrequency: 'Annual',
@@ -251,7 +260,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserProfile>(initialUser);
   const [xp, setXp] = useState(0);
   const [streak, setStreak] = useState(0);
-  const [atsScore, setAtsScore] = useState(0);
+  const [atsScore, setAtsScore] = useState<number | null>(null);
   const [badges, setBadges] = useState<Badge[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -270,8 +279,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const { level, currentLevelXp, totalXpForNextLevel, levelName } = calculateLevel(xp);
   const profileCompletion = calculateProfileCompletion(user);
 
-  const addXP = useCallback((amount: number) => {
-    // Optimistic UI update; server will correct from persisted gamification state.
+  const addXP = useCallback((amount: number, opts?: { actionKey?: string; actionType?: string }) => {
     setXp(prev => prev + amount);
     setLastXpGain(amount);
     setShowXpBurst(true);
@@ -282,7 +290,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         const res = await fetch('/api/v1/gamification/award', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount }),
+          body: JSON.stringify({
+            amount,
+            ...(opts?.actionKey ? { actionKey: opts.actionKey } : {}),
+            ...(opts?.actionType ? { actionType: opts.actionType } : {}),
+          }),
           credentials: 'include',
         });
 
@@ -301,6 +313,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const updateProfile = useCallback(async (data: Partial<UserProfile>): Promise<boolean> => {
+    const snapshot = user;
     setUser(prev => ({ ...prev, ...data }));
 
     if (!session?.user?.id) return false;
@@ -324,6 +337,8 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       preferredIndustry: data.preferredIndustry?.trim() || undefined,
       preferredIndustries: Array.isArray(data.preferredIndustries) ? data.preferredIndustries : undefined,
       salaryExpectation: data.salaryGoal?.trim() || undefined,
+      salaryGoalCurrency: data.salaryGoalCurrency || undefined,
+      salaryGoalFrequency: data.salaryGoalFrequency || undefined,
       currentSalary: data.currentSalary?.trim() || undefined,
       salaryCurrency: data.salaryCurrency || undefined,
       salaryFrequency: data.salaryFrequency || undefined,
@@ -339,21 +354,19 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     if (Object.keys(cleaned).length === 0) return true;
 
     try {
-      const res = await fetch('/api/v1/profile', {
+      await apiFetchJson('/api/v1/profile', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cleaned),
-        credentials: 'include',
       });
-      if (!res.ok) {
-        console.warn('[updateProfile] server rejected update:', await res.text().catch(() => ''));
-        return false;
-      }
+      void invalidateInsightsQueries(getQueryClient());
       return true;
-    } catch {
+    } catch (e) {
+      setUser(snapshot);
+      const { toast } = await import('sonner');
+      toast.error(parseApiError(e, 'Could not save profile changes'));
       return false;
     }
-  }, [session?.user?.id]);
+  }, [session?.user?.id, user]);
 
   const markOnboarded = useCallback(() => {
     setIsOnboarded(true);
@@ -381,12 +394,16 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     await signOutUser();
   }, [session?.user?.id]);
 
-  const refreshFromServer = useCallback(async (opts?: { silent?: boolean; force?: boolean }) => {
+  const refreshFromServer = useCallback(async (opts?: { silent?: boolean; force?: boolean; scope?: RefreshScope }) => {
     if (!session?.user?.id) return;
     const silent = Boolean(opts?.silent);
     const force = Boolean(opts?.force);
+    const scope = opts?.scope ?? 'all';
+    const wantMe = scope === 'all' || scope === 'me';
+    const wantJobs = scope === 'all' || scope === 'jobs';
+    const wantCourses = scope === 'all' || scope === 'courses';
+    const wantRoadmap = scope === 'all' || scope === 'roadmap';
     const now = Date.now();
-    // Short-lived in-memory stale guard to avoid duplicate cascades from rapid UI effects.
     if (!force && now - lastRefreshAtRef.current < 8_000) return;
     if (refreshInFlightRef.current) {
       await refreshInFlightRef.current;
@@ -394,178 +411,210 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }
 
     const run = (async () => {
-      if (!silent) setIsHydratingApp(true);
-    setJobsLoading(true);
-    setJobsError(null);
-    try {
-      const [meRes, jobsRes, coursesRes, roadmapRes] = await Promise.all([
-        fetch('/api/v1/me', { credentials: 'include' }),
-        fetch('/api/v1/jobs/recommendations', { credentials: 'include' }),
-        fetch('/api/v1/courses', { credentials: 'include' }),
-        fetch('/api/v1/learning/roadmap', { credentials: 'include' }),
-      ]);
-      let profileSnapshot: Record<string, unknown> | null = null;
+      if (!silent) {
+        if (wantMe) setIsHydratingApp(true);
+        if (wantJobs) setJobsLoading(true);
+      }
+      if (wantJobs) setJobsError(null);
+      try {
+        let profileSnapshot: Record<string, unknown> | null = null;
 
-      if (meRes.ok) {
-        const meJson = await meRes.json();
-        const data = meJson?.data ?? {};
-        const apiUser = data.user ?? {};
-        const profile = data.profile ?? {};
-        profileSnapshot = profile as Record<string, unknown>;
-        const skills = Array.isArray(data.skills) ? data.skills : [];
-        const latestResume = data.latestResume ?? null;
-        const gamification = data.gamification ?? null;
-        const rawCerts = Array.isArray(data.certifications) ? data.certifications : [];
+        if (wantMe) {
+          const meResult = await apiFetch<Record<string, unknown>>('/api/v1/me', { allowError: true });
+          if (!meResult.ok) {
+            if (meResult.error.status === 404 && meResult.error.code === 'USER_NOT_REGISTERED') {
+              const { toast } = await import('sonner');
+              toast.error('Your account is not registered. Please sign up.');
+              await signOutUnregistered();
+              return;
+            }
+          } else {
+            const data = meResult.data;
+            const apiUser = (data.user ?? {}) as Record<string, unknown>;
+            const profile = (data.profile ?? {}) as Record<string, unknown>;
+            profileSnapshot = profile;
+            const skills = Array.isArray(data.skills) ? data.skills : [];
+            const latestResume = data.latestResume as Record<string, unknown> | null;
+            const gamification = data.gamification as Record<string, unknown> | null;
+            const rawCerts = Array.isArray(data.certifications) ? data.certifications : [];
 
-        const mappedSkills = skills
-          .map((s: { skill?: { label?: string } }) => s?.skill?.label)
-          .filter(Boolean) as string[];
+            const mappedSkills = skills
+              .map((s: { skill?: { label?: string } }) => s?.skill?.label)
+              .filter(Boolean) as string[];
 
-        const ats = latestResume?.atsScore ?? null;
-        const resumeComplete = latestResume?.parseStatus === 'COMPLETE';
-        const themePreference = (profile?.themePreference ?? 'system') as 'dark' | 'light' | 'system';
-        const profileVersion = Number(profile?.profileVersion ?? 0);
+            const ats = latestResume?.atsScore ?? null;
+            const resumeComplete = latestResume?.parseStatus === 'COMPLETE';
+            const themePreference = (profile?.themePreference ?? 'system') as 'dark' | 'light' | 'system';
+            const profileVersion = Number(profile?.profileVersion ?? 0);
 
-        setUser(prev => ({
-          ...prev,
-          name: apiUser?.name ?? prev.name,
-          email: apiUser?.email ?? '',
-          photo: apiUser?.image ?? null,
-          currentRole: profile?.currentRole ?? '',
-          experience: profile?.experienceYears ?? '',
-          skills: mappedSkills,
-          education: profile?.education ?? '',
-          certifications: rawCerts.map((c: Record<string, unknown>): UserCertification => ({
-            id: String(c.id ?? ''),
-            name: String(c.name ?? ''),
-            issuer: String(c.issuer ?? ''),
-            issueDate: (c.issueDate as string | null) ?? null,
-            expiryDate: (c.expiryDate as string | null) ?? null,
-            credentialId: (c.credentialId as string | null) ?? null,
-            credentialUrl: (c.credentialUrl as string | null) ?? null,
-          })),
-          careerGoal: profile?.careerGoal ?? '',
-          targetRole: profile?.targetRole ?? '',
-          preferredIndustry: profile?.preferredIndustry ?? '',
-          preferredIndustries: Array.isArray(profile?.preferredIndustries) ? profile.preferredIndustries : [],
-          linkedIn: profile?.linkedInUrl ?? '',
-          github: profile?.githubUrl ?? '',
-          bio: profile?.bio ?? '',
-          salaryGoal: profile?.salaryExpectation ?? '',
-          currentSalary: profile?.currentSalary ?? '',
-          salaryCurrency: profile?.salaryCurrency ?? 'USD',
-          salaryFrequency: profile?.salaryFrequency ?? 'Annual',
-          compensationType: profile?.compensationType ?? '',
-          country: profile?.country ?? '',
-          locationPreference: profile?.locationPreference ?? '',
-          resumeUploaded: Boolean(resumeComplete),
-          atsOptimized: ats != null ? Number(ats) >= 80 : false,
-          projects: [],
-          themePreference,
-          subscriptionTier: profile?.subscriptionTier ?? 'FREE',
-          profileVersion,
-        }));
-        setAlreadyClaimedToday(Boolean(data.alreadyClaimedToday));
+            setUser(prev => ({
+              ...prev,
+              name: (apiUser?.name as string) ?? prev.name,
+              email: (apiUser?.email as string) ?? '',
+              photo: (apiUser?.image as string) ?? null,
+              currentRole: (profile?.currentRole as string) ?? '',
+              experience: (profile?.experienceYears as string) ?? '',
+              skills: mappedSkills,
+              education: (profile?.education as string) ?? '',
+              certifications: rawCerts.map((c: Record<string, unknown>): UserCertification => ({
+                id: String(c.id ?? ''),
+                name: String(c.name ?? ''),
+                issuer: String(c.issuer ?? ''),
+                issueDate: (c.issueDate as string | null) ?? null,
+                expiryDate: (c.expiryDate as string | null) ?? null,
+                credentialId: (c.credentialId as string | null) ?? null,
+                credentialUrl: (c.credentialUrl as string | null) ?? null,
+              })),
+              careerGoal: (profile?.careerGoal as string) ?? '',
+              targetRole: (profile?.targetRole as string) ?? '',
+              preferredIndustry: (profile?.preferredIndustry as string) ?? '',
+              preferredIndustries: Array.isArray(profile?.preferredIndustries) ? profile.preferredIndustries as string[] : [],
+              linkedIn: (profile?.linkedInUrl as string) ?? '',
+              github: (profile?.githubUrl as string) ?? '',
+              bio: (profile?.bio as string) ?? '',
+              salaryGoal: (profile?.salaryExpectation as string) ?? '',
+              salaryGoalCurrency: (profile?.salaryGoalCurrency as string) ?? 'USD',
+              salaryGoalFrequency: (profile?.salaryGoalFrequency as string) ?? 'Annual',
+              currentSalary: (profile?.currentSalary as string) ?? '',
+              salaryCurrency: (profile?.salaryCurrency as string) ?? 'USD',
+              salaryFrequency: (profile?.salaryFrequency as string) ?? 'Annual',
+              compensationType: (profile?.compensationType as string) ?? '',
+              country: (profile?.country as string) ?? '',
+              locationPreference: (profile?.locationPreference as string) ?? '',
+              resumeUploaded: Boolean(resumeComplete),
+              atsOptimized: ats != null ? Number(ats) >= 80 : false,
+              projects: [],
+              themePreference,
+              subscriptionTier: (profile?.subscriptionTier as string) ?? 'FREE',
+              profileVersion,
+            }));
+            setAlreadyClaimedToday(Boolean(data.alreadyClaimedToday));
 
         if (typeof window !== 'undefined') {
           window.dispatchEvent(
-            new CustomEvent('cp-profile-loaded', { detail: { themePreference, profileVersion } }),
+            new CustomEvent('cp-profile-loaded', {
+              detail: {
+                themePreference,
+                profileVersion,
+                onboardingComplete: Boolean(profile?.onboardingComplete),
+              },
+            }),
           );
         }
 
-        const onboarded = Boolean(profile?.onboardingComplete);
-        setIsOnboarded(onboarded);
-        if (onboarded && session?.user?.id) {
-          try { writeOnboardingCache(session.user.id); } catch { /* ignore */ }
+            const onboarded = Boolean(profile?.onboardingComplete);
+            setIsOnboarded(onboarded);
+            if (onboarded && session?.user?.id) {
+              try { writeOnboardingCache(session.user.id); } catch { /* ignore */ }
+            }
+            setAtsScore(ats != null && Number.isFinite(Number(ats)) ? Number(ats) : null);
+            setXp(gamification?.xp != null ? Number(gamification.xp) : 0);
+            setStreak(gamification?.streak != null ? Number(gamification.streak) : 0);
+            setBadges(Array.isArray(gamification?.badges) ? (gamification.badges as Badge[]) : []);
+            void getQueryClient().invalidateQueries({ queryKey: insightsQueryKeys.profileAnalytics() });
+          }
         }
-        setAtsScore(ats != null ? Number(ats) : 0);
-        setXp(gamification?.xp != null ? Number(gamification.xp) : 0);
-        setStreak(gamification?.streak != null ? Number(gamification.streak) : 0);
-        setBadges(Array.isArray(gamification?.badges) ? (gamification.badges as Badge[]) : []);
-      }
 
-      if (jobsRes.ok) {
-        const jobsJson = await jobsRes.json();
-        const ranked = Array.isArray(jobsJson?.data) ? jobsJson.data : [];
-        setJobs(
-          ranked.map((r: Record<string, unknown>) => {
-            const job = r?.job as Record<string, unknown> | undefined;
-            const reasons = Array.isArray(r?.reasons) ? (r.reasons as string[]) : [];
-            const missingSkills = reasons
-              .filter(reason => reason.startsWith('skill:'))
-              .slice(0, 4)
-              .map(reason => reason.replace('skill:', '').trim())
-              .filter(Boolean);
-            return {
-              id: (job?.id as string) ?? String(r?.id ?? Math.random()),
-              title: (job?.title as string) ?? 'Untitled role',
-              company: (job?.company as string) ?? 'Unknown',
-              location: (job?.location as string) ?? 'Remote',
-              salary: formatJobSalaryRange(
-                typeof job?.salaryMin === 'number' ? job.salaryMin : null,
-                typeof job?.salaryMax === 'number' ? job.salaryMax : null,
-                resolveSalaryLocale({
-                  salaryCurrency:
-                    typeof job?.currency === 'string'
-                      ? job.currency
-                      : (profileSnapshot?.salaryCurrency as string | undefined) ?? 'USD',
-                  country: (profileSnapshot?.country as string | undefined) ?? '',
-                  salaryFrequency:
-                    (profileSnapshot?.salaryFrequency as string | undefined) ?? 'Annual',
-                }),
-              ),
-              matchPercent: Number(r?.score ?? 0),
-              missingSkills,
-              xpReward: Math.max(50, Math.round(Number(r?.score ?? 0) * 1.2)),
-              type: (job?.employmentType as string) ?? 'Full-time',
-              postedDays: Number(job?.postedDays ?? 0),
-              logo: '🏢',
-              url: typeof job?.url === 'string' ? job.url : undefined,
-            };
-          }),
-        );
-        setJobsError(null);
-      } else {
-        setJobsError('Unable to load job matches right now.');
-      }
+        const salaryCtx = profileSnapshot ?? {
+          salaryCurrency: user.salaryCurrency,
+          country: user.country,
+          salaryFrequency: user.salaryFrequency,
+        };
 
-      if (coursesRes.ok) {
-        const coursesJson = await coursesRes.json();
-        const all = Array.isArray(coursesJson?.data?.all) ? coursesJson.data.all : [];
-        setCourses(all.map((c: Course) => normalizeCourse(c)).filter(Boolean) as Course[]);
-      } else {
-        setCourses([]);
-      }
+        if (wantJobs) {
+          try {
+            const ranked = await apiFetchJson<Record<string, unknown>[]>('/api/v1/jobs/recommendations');
+            const list = Array.isArray(ranked) ? ranked : [];
+            setJobs(
+              list.map((r: Record<string, unknown>) => {
+                const job = r?.job as Record<string, unknown> | undefined;
+                const reasons = Array.isArray(r?.reasons) ? (r.reasons as string[]) : [];
+                const missingSkills = reasons
+                  .filter(reason => reason.startsWith('skill:'))
+                  .slice(0, 4)
+                  .map(reason => reason.replace('skill:', '').trim())
+                  .filter(Boolean);
+                return {
+                  id: (job?.id as string) ?? String(r?.id ?? Math.random()),
+                  title: (job?.title as string) ?? 'Untitled role',
+                  company: (job?.company as string) ?? 'Unknown',
+                  location: (job?.location as string) ?? 'Remote',
+                  salary: formatJobSalaryRange(
+                    typeof job?.salaryMin === 'number' ? job.salaryMin : null,
+                    typeof job?.salaryMax === 'number' ? job.salaryMax : null,
+                    resolveSalaryLocale({
+                      salaryCurrency:
+                        typeof job?.currency === 'string'
+                          ? job.currency
+                          : (salaryCtx.salaryCurrency as string | undefined) ?? 'USD',
+                      country: (salaryCtx.country as string | undefined) ?? '',
+                      salaryFrequency:
+                        (salaryCtx.salaryFrequency as string | undefined) ?? 'Annual',
+                    }),
+                  ),
+                  matchPercent: Number(r?.score ?? 0),
+                  missingSkills,
+                  xpReward: Math.max(50, Math.round(Number(r?.score ?? 0) * 1.2)),
+                  type: (job?.employmentType as string) ?? 'Full-time',
+                  postedDays: Number(job?.postedDays ?? 0),
+                  logo: '🏢',
+                  url: typeof job?.url === 'string' ? job.url : undefined,
+                };
+              }),
+            );
+            setJobsError(null);
+          } catch {
+            setJobsError('Unable to load job matches right now.');
+          }
+        }
 
-      const roadmapJson = roadmapRes.ok ? await roadmapRes.json() : null;
-      const roadmapData = roadmapJson?.data ?? null;
-      if (roadmapData?.roadmap?.jsonPlan) {
-        setRoadmapPlan(roadmapData.roadmap.jsonPlan as RoadmapPlan);
-      } else {
-        setRoadmapPlan(null);
+        if (wantCourses) {
+          try {
+            const coursesData = await apiFetchJson<{ all?: Course[] }>('/api/v1/courses');
+            const all = Array.isArray(coursesData?.all) ? coursesData.all : [];
+            setCourses(all.map((c: Course) => normalizeCourse(c)).filter(Boolean) as Course[]);
+          } catch {
+            setCourses([]);
+          }
+        }
+
+        if (wantRoadmap) {
+          try {
+            const roadmapData = await apiFetchJson<{ roadmap?: { jsonPlan?: RoadmapPlan } }>('/api/v1/learning/roadmap');
+            if (roadmapData?.roadmap?.jsonPlan) {
+              setRoadmapPlan(roadmapData.roadmap.jsonPlan);
+            } else {
+              setRoadmapPlan(null);
+            }
+          } catch {
+            setRoadmapPlan(null);
+          }
+        }
+      } catch (e) {
+        console.warn('[GameContext] refreshFromServer failed', e);
+        if (wantJobs) setJobsError(parseApiError(e, 'Unable to refresh your data right now.'));
+        if (session?.user?.id) {
+          try {
+            const cached = readOnboardingCache(session.user.id);
+            if (cached === '1') setIsOnboarded(true);
+          } catch { /* ignore */ }
+        }
+      } finally {
+        if (!silent) {
+          if (wantJobs) setJobsLoading(false);
+          if (wantMe) setIsHydratingApp(false);
+        }
+        lastRefreshAtRef.current = Date.now();
       }
-    } catch (e) {
-      console.warn('[GameContext] refreshFromServer failed', e);
-      setJobsError('Unable to refresh your data right now.');
-      // Don't leave isOnboarded as false for an authenticated user when ME fails
-      // transiently (network hiccup, cold start). Read the localStorage cache that
-      // we wrote on the last successful ME call so the user isn't kicked to onboarding.
-      if (session?.user?.id) {
-        try {
-          const cached = readOnboardingCache(session.user.id);
-          if (cached === '1') setIsOnboarded(true);
-        } catch { /* ignore */ }
-      }
-    } finally {
-      setJobsLoading(false);
-      if (!silent) setIsHydratingApp(false);
-      lastRefreshAtRef.current = Date.now();
-    }
     })();
+    if (scope === 'jobs' || scope === 'courses' || scope === 'roadmap') {
+      await run;
+      return;
+    }
     refreshInFlightRef.current = run;
     await run;
     refreshInFlightRef.current = null;
-  }, [session?.user?.id]);
+  }, [session?.user?.id, user.country, user.salaryCurrency, user.salaryFrequency]);
 
   useEffect(() => {
     if (!session?.user?.id) {
@@ -575,7 +624,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     }
     if (mountedUserIdRef.current === session.user.id) return;
     mountedUserIdRef.current = session.user.id;
-    void refreshFromServer({ force: true });
+    void (async () => {
+      await refreshFromServer({ force: true, scope: 'me' });
+      await Promise.all([
+        refreshFromServer({ silent: true, force: true, scope: 'jobs' }),
+        refreshFromServer({ silent: true, force: true, scope: 'courses' }),
+        refreshFromServer({ silent: true, force: true, scope: 'roadmap' }),
+      ]);
+    })();
   }, [session?.user?.id, refreshFromServer]);
 
   const completeLesson = useCallback((

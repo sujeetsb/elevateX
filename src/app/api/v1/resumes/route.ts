@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '@/server/db/prisma';
 import { inngest } from '@/server/inngest/client';
 import { awardGamificationXp } from '@/server/gamification/gamification.service';
+import { enqueueResumeParse } from '@/server/services/resume-parse-runner.service';
 import { getSession } from '@/server/http/get-session';
 import { cacheService } from '@/server/cache/cache-service';
 import { handleApiError } from '@/server/errors/handler';
@@ -187,7 +188,7 @@ export async function POST(req: Request) {
         },
       });
       await cacheService.invalidateUser(session.user.id);
-      await inngest.send({ name: 'app/resume.parse', data: { resumeId: updated.id } });
+      await enqueueResumeParse(updated.id);
       return NextResponse.json({
         ok: true,
         data: {
@@ -215,10 +216,7 @@ export async function POST(req: Request) {
 
     await cacheService.invalidateUser(session.user.id);
 
-    await inngest.send({
-      name: 'app/resume.parse',
-      data: { resumeId: resume.id },
-    });
+    await enqueueResumeParse(resume.id);
 
     const today = new Date().toISOString().slice(0, 10);
     await awardGamificationXp({

@@ -11,6 +11,8 @@ import {
   getFreshUserInsights,
   hasSalaryInsightsPayload,
 } from '@/server/services/user-insights.service';
+import { spendGamificationXp } from '@/server/gamification/gamification.service';
+import { getXpCost } from '@/lib/gamification/xp-costs';
 
 export const dynamic = 'force-dynamic';
 
@@ -113,6 +115,13 @@ export async function GET() {
     if (needsRegen) {
       // Only rate-limit expensive AI regeneration — cached DB reads are cheap.
       await enforceRateLimit(`user:${session.user.id}:salary-insights:generate`, { limit: 6, window: '60 m' });
+      const xpCost = getXpCost('SALARY_INSIGHTS');
+      await spendGamificationXp({
+        userId: session.user.id,
+        amount: xpCost,
+        actionKey: `salary-insights:${session.user.id}:${new Date().toISOString().slice(0, 10)}`,
+        actionType: 'SALARY_INSIGHTS',
+      });
       stored = await generateUserInsights(session.user.id);
     }
 

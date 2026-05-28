@@ -4,7 +4,8 @@ import { getSession } from '@/server/http/get-session';
 import { handleApiError } from '@/server/errors/handler';
 import { unauthorized, notFound } from '@/server/errors/http-error';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
-import { awardGamificationXp } from '@/server/gamification/gamification.service';
+import { spendGamificationXp, awardGamificationXp } from '@/server/gamification/gamification.service';
+import { getXpCost } from '@/lib/gamification/xp-costs';
 import { requireProSession } from '@/server/subscription/require-pro';
 import { prisma } from '@/server/db/prisma';
 import {
@@ -27,6 +28,16 @@ export async function POST(req: Request) {
     await enforceRateLimit(`user:${session.user.id}:cover-letter`, { limit: 10, window: '60 m' });
 
     const body = bodySchema.parse(await req.json());
+    const xpCost = getXpCost('COVER_LETTER');
+    const actionKey = `cover-letter-xp:${body.jobId}:${new Date().toISOString().slice(0, 10)}`;
+
+    await spendGamificationXp({
+      userId: session.user.id,
+      amount: xpCost,
+      actionKey,
+      actionType: 'COVER_LETTER',
+    });
+
     const payload = await generateCoverLetterForJob({
       userId: session.user.id,
       jobId: body.jobId,
@@ -39,8 +50,8 @@ export async function POST(req: Request) {
     await awardGamificationXp({
       userId: session.user.id,
       amount: 10,
-      actionKey: `cover-letter:${body.jobId}:${today}`,
-      actionType: 'COVER_LETTER',
+      actionKey: `cover-letter-bonus:${body.jobId}:${today}`,
+      actionType: 'COVER_LETTER_BONUS',
     });
     await prisma.activityLog.create({
       data: {

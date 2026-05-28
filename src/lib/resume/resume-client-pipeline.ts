@@ -3,20 +3,14 @@
  * Shared by onboarding-style flows and ATS + Resume Studio.
  */
 
+import { parseApiError } from '@/lib/api/client';
+import { validateResumeUpload } from '@/lib/resume/validate-upload';
+
 const MAX_RESUME_TEXT = 100_000;
 
-export const RESUME_ACCEPT = '.pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain';
+export const RESUME_ACCEPT = '.pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain';
 
-export function parseApiError(json: unknown, fallback: string): string {
-  if (!json || typeof json !== 'object') return fallback;
-  const j = json as Record<string, unknown>;
-  if (typeof j.message === 'string') return j.message;
-  const err = j.error;
-  if (err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string') {
-    return (err as { message: string }).message;
-  }
-  return fallback;
-}
+export { parseApiError };
 
 export function normalizeUploadThingFile(file: unknown): {
   fileUrl: string;
@@ -41,19 +35,7 @@ export function validateLocalResumeFile(file: File): { ok: true } | { ok: false;
   if (file.size > maxBytes) {
     return { ok: false, message: 'File is too large (max 10MB).' };
   }
-  const name = file.name.toLowerCase();
-  const okExt = name.endsWith('.pdf') || name.endsWith('.doc') || name.endsWith('.docx') || name.endsWith('.txt');
-  const mime = (file.type || '').toLowerCase();
-  const okMime =
-    mime.includes('pdf') ||
-    mime.includes('msword') ||
-    mime.includes('wordprocessingml') ||
-    mime.includes('officedocument') ||
-    mime === 'text/plain';
-  if (!okExt && !okMime) {
-    return { ok: false, message: 'Unsupported file type. Use PDF, DOC, DOCX, or TXT.' };
-  }
-  return { ok: true };
+  return validateResumeUpload(file.name, file.type || undefined);
 }
 
 export async function postResumeFromUploadThingParts(parts: {

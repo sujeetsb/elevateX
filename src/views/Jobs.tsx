@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { motion } from 'motion/react';
 import { Search, MapPin, Clock, Zap, ChevronRight, Briefcase, TrendingUp, AlertCircle, Loader2 } from 'lucide-react';
@@ -11,10 +11,16 @@ import { DialogTitle } from '@/components/ui/dialog';
 import { ProUpgradeModal } from '../components/ProUpgradeModal';
 import { coverLetterPdfDataUrl, downloadCoverLetterPdf } from '@/lib/pdf/cover-letter-pdf';
 import { resumePdfDataUrl, downloadResumePdf } from '@/lib/pdf/resume-pdf';
+import { interviewPrepPdfDataUrl, downloadInterviewPrepPdf } from '@/lib/pdf/interview-prep-pdf';
 import { isProTierClient } from '@/lib/subscription/tier';
+import { getXpCost } from '@/lib/gamification/xp-costs';
+import { LowXpAlert } from '@/components/LowXpAlert';
+import { useProfileInsights } from '@/lib/hooks/use-profile-insights';
 import {
   useCoverLetter,
   useGenerateCoverLetterMutation,
+  useGenerateInterviewPrepMutation,
+  useInterviewPrep,
   useOptimizeResumeMutation,
   useOptimizedResume,
 } from '@/lib/hooks/use-job-documents';
@@ -25,6 +31,7 @@ export function Jobs() {
   const { data: session } = useSession();
   const userId = session?.user?.id;
   const { jobs, addXP, user, isAuthenticated, isHydrating, refresh, jobsLoading, jobsError } = useGame();
+  const { data: profileInsights } = useProfileInsights(user.profileVersion, isAuthenticated);
   const isPro = isProTierClient(user.subscriptionTier);
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,19 +46,46 @@ export function Jobs() {
   const [coverPdfUrl, setCoverPdfUrl] = useState('');
   const [showResumePdf, setShowResumePdf] = useState(false);
   const [resumePdfUrl, setResumePdfUrl] = useState('');
+  const [showInterviewPdf, setShowInterviewPdf] = useState(false);
+  const [interviewPdfUrl, setInterviewPdfUrl] = useState('');
+  const [interviewXpError, setInterviewXpError] = useState<{ required?: number; balance?: number; suggestions?: string[] } | null>(null);
+  const [loadSavedResume, setLoadSavedResume] = useState(false);
 
   const selectedJobData = jobs.find(j => j.id === selectedJob);
-  const { data: optimizedResume } = useOptimizedResume(userId, selectedJob);
+
+  const displayMissingSkills = useMemo(() => {
+    if (!selectedJobData) return [];
+    const fromJob = selectedJobData.missingSkills ?? [];
+    if (fromJob.length >= 2) return fromJob;
+    const insightSkills = (profileInsights?.skillsGap ?? [])
+      .map(g => g.skill)
+      .filter(s => !user.skills.some(us => us.toLowerCase() === s.toLowerCase()));
+    return Array.from(new Set([...fromJob, ...insightSkills])).slice(0, 4);
+  }, [selectedJobData, profileInsights?.skillsGap, user.skills]);
+  const { data: savedOptimizedResume, isFetching: loadingSavedResume } = useOptimizedResume(
+    userId,
+    loadSavedResume ? selectedJob : null,
+  );
   const { data: coverLetterDoc } = useCoverLetter(userId, selectedJob);
+  const { data: interviewPrepDoc } = useInterviewPrep(userId, selectedJob);
   const optimizeMutation = useOptimizeResumeMutation(userId);
   const coverLetterMutation = useGenerateCoverLetterMutation(userId);
+  const interviewPrepMutation = useGenerateInterviewPrepMutation(userId);
+
+  useEffect(() => {
+    setLoadSavedResume(false);
+    optimizeMutation.reset();
+  }, [selectedJob]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const coverLetter = coverLetterDoc?.letter ?? null;
-  const optimizeResult = optimizedResume ?? null;
+  const optimizeResult = optimizeMutation.data ?? (loadSavedResume ? savedOptimizedResume ?? null : null);
   const optimizeLoading = optimizeMutation.isPending;
   const optimizeError = optimizeMutation.error instanceof Error ? optimizeMutation.error.message : null;
   const coverLetterLoading = coverLetterMutation.isPending;
   const coverLetterError = coverLetterMutation.error instanceof Error ? coverLetterMutation.error.message : null;
+  const interviewPrep = interviewPrepDoc ?? null;
+  const interviewPrepLoading = interviewPrepMutation.isPending;
+  const interviewPrepError = interviewPrepMutation.error instanceof Error ? interviewPrepMutation.error.message : null;
 
   const buildCoverPdfInput = () => {
     if (!coverLetter) return null;
@@ -86,6 +120,55 @@ export function Jobs() {
       `resume-${selectedJobData.company}-${selectedJobData.title}.pdf`.replace(/[^a-z0-9.-]+/gi, '-').toLowerCase(),
     );
     toast.success('Resume PDF downloaded');
+  };
+
+  const buildJobDescription = (job: typeof selectedJobData) => {
+    if (!job) return '';
+    const gaps = displayMissingSkills.length ? displayMissingSkills : job.missingSkills;
+    return `${job.title} at ${job.company}. ${job.type}. Location: ${job.location}. Skills gap: ${gaps.join(', ') || 'none'}. Match ${job.matchPercent}%.`;
+  };
+
+  const handleGenerateInterviewPrep = async () => {
+    if (!selectedJobData) return;
+    if (!isPro) {
+      setProFeature('Interview Preparation');
+      setShowProModal(true);
+      return;
+    }
+    setInterviewXpError(null);
+    try {
+      await interviewPrepMutation.mutateAsync({
+        jobId: selectedJobData.id,
+        jobTitle: selectedJobData.title,
+        company: selectedJobData.company,
+        jobDescription: buildJobDescription(selectedJobData),
+      });
+      void refresh();
+      toast.success('Interview prep generated');
+    } catch (e) {
+      const err = e as Error & { status?: number; code?: string; details?: { required?: number; balance?: number; suggestions?: string[] } };
+      if (err.status === 403) {
+        setProFeature('Interview Preparation');
+        setShowProModal(true);
+        return;
+      }
+      if (err.code === 'INSUFFICIENT_XP' && err.details) {
+        setInterviewXpError(err.details);
+      }
+      toast.error(err.message || 'Could not generate interview prep');
+    }
+  };
+
+  const openInterviewPdfPreview = () => {
+    if (!interviewPrep) return;
+    setInterviewPdfUrl(interviewPrepPdfDataUrl(interviewPrep));
+    setShowInterviewPdf(true);
+  };
+
+  const handleDownloadInterviewPdf = () => {
+    if (!interviewPrep) return;
+    downloadInterviewPrepPdf(interviewPrep);
+    toast.success('Interview prep PDF downloaded');
   };
 
   const filteredJobs = jobs.filter(job => {
@@ -162,7 +245,7 @@ export function Jobs() {
       setShowProModal(true);
       return;
     }
-    const jobDescription = `${selectedJobData.title} at ${selectedJobData.company}. ${selectedJobData.type}. Location: ${selectedJobData.location}. Skills gap: ${selectedJobData.missingSkills.join(', ') || 'none'}. Match ${selectedJobData.matchPercent}%.`;
+    const jobDescription = buildJobDescription(selectedJobData);
     try {
       await optimizeMutation.mutateAsync({
         jobId: selectedJobData.id,
@@ -170,6 +253,7 @@ export function Jobs() {
         company: selectedJobData.company,
         jobDescription,
       });
+      setLoadSavedResume(true);
       toast.success('Resume optimized for this role');
     } catch (e) {
       const err = e as Error & { status?: number };
@@ -516,14 +600,14 @@ export function Jobs() {
               ))}
             </div>
 
-            {selectedJobData.missingSkills.length > 0 && (
+            {displayMissingSkills.length > 0 && (
               <div className="rounded-2xl p-4 mb-5" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
                 <div className="flex items-center gap-2 mb-2">
                   <AlertCircle size={16} color="#f59e0b" />
                   <span style={{ color: '#f59e0b', fontWeight: 600, fontSize: '0.85rem' }}>Skills to develop</span>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {selectedJobData.missingSkills.map(skill => (
+                  {displayMissingSkills.map(skill => (
                     <div key={skill} className="rounded-xl px-3 py-1.5"
                       style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)', color: '#f59e0b', fontSize: '0.8rem' }}>
                       {skill}
@@ -573,6 +657,19 @@ export function Jobs() {
                 >
                   {optimizeLoading ? 'Optimizing resume…' : isPro ? '🎯 Optimize Resume for This Job' : '🎯 Optimize Resume for This Job (PRO)'}
                 </button>
+                {!loadSavedResume && !optimizeLoading && (
+                  <button
+                    type="button"
+                    onClick={() => setLoadSavedResume(true)}
+                    className="w-full py-2 rounded-xl text-xs font-medium mb-2"
+                    style={{ color: 'var(--cp-text-muted)', background: 'var(--cp-surface-1)', border: '1px solid var(--cp-border-subtle)' }}
+                  >
+                    Load previously saved optimization
+                  </button>
+                )}
+                {loadingSavedResume && (
+                  <p className="text-xs mb-2" style={{ color: 'var(--cp-text-muted)' }}>Checking for saved resume…</p>
+                )}
 
                 {optimizeError && <p className="text-xs text-rose-400 mb-2">{optimizeError}</p>}
               </div>}
@@ -616,6 +713,54 @@ export function Jobs() {
                   {coverLetterError && <p className="text-xs text-rose-400 mb-2">{coverLetterError}</p>}
                 </div>
               }
+
+              {interviewPrep ? (
+                <div className="rounded-xl p-2 mt-3" style={{ border: '1px solid var(--cp-border)' }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs" style={{ color: '#06b6d4', fontWeight: 600 }}>Interview Preparation</span>
+                    <span className="text-xs" style={{ color: 'var(--cp-text-muted)' }}>Saved</span>
+                  </div>
+                  <div className="text-xs mb-2 space-y-1" style={{ color: 'var(--cp-text-muted)' }}>
+                    <div>{interviewPrep.behavioralQuestions.length} behavioral · {interviewPrep.technicalQuestions.length} technical</div>
+                    <div>{interviewPrep.hrQuestions.length} HR · {interviewPrep.scenarioQuestions.length} scenario</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={openInterviewPdfPreview}
+                      className="flex-1 py-2 rounded-xl text-xs font-semibold glass-card"
+                      style={{ color: '#06b6d4' }}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadInterviewPdf}
+                      className="flex-1 py-2 rounded-xl text-xs font-semibold btn-primary"
+                    >
+                      Download PDF
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => void handleGenerateInterviewPrep()}
+                    disabled={interviewPrepLoading}
+                    className="w-full py-3 rounded-2xl text-sm font-semibold mb-2 disabled:opacity-60"
+                    style={{ background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.35)', color: '#06b6d4' }}
+                  >
+                    {interviewPrepLoading
+                      ? 'Generating interview prep…'
+                      : isPro
+                        ? `🎯 Interview Preparation (−${getXpCost('INTERVIEW_PREP')} XP)`
+                        : '🎯 Interview Preparation (PRO)'}
+                  </button>
+                  {interviewPrepError && <p className="text-xs text-rose-400 mb-2">{interviewPrepError}</p>}
+                  {interviewXpError && <LowXpAlert {...interviewXpError} className="mb-2" />}
+                </div>
+              )}
             </div>
 
             {applyError && (
@@ -716,6 +861,28 @@ export function Jobs() {
           <button
             type="button"
             onClick={handleDownloadCoverPdf}
+            className="btn-primary w-full py-2.5 rounded-xl mt-4 text-sm font-semibold"
+          >
+            Download PDF
+          </button>
+        </div>
+      </CareerDialog>
+
+      <CareerDialog open={showInterviewPdf} onOpenChange={setShowInterviewPdf}>
+        <DialogTitle className="sr-only">Interview prep PDF preview</DialogTitle>
+        <div className="pr-8">
+          <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Interview preparation preview</h3>
+          {interviewPdfUrl ? (
+            <iframe
+              title="Interview prep PDF preview"
+              src={interviewPdfUrl}
+              className="w-full rounded-xl border"
+              style={{ height: '420px', borderColor: 'var(--cp-border)' }}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={handleDownloadInterviewPdf}
             className="btn-primary w-full py-2.5 rounded-xl mt-4 text-sm font-semibold"
           >
             Download PDF

@@ -12,6 +12,8 @@ import {
   rowToOptimizedPayload,
 } from '@/server/services/job-resume-optimize.service';
 import { enforceRateLimit } from '@/server/rate-limit/upstash-route';
+import { spendGamificationXp } from '@/server/gamification/gamification.service';
+import { getXpCost } from '@/lib/gamification/xp-costs';
 import { prisma } from '@/server/db/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -30,6 +32,16 @@ export async function POST(req: Request) {
     await enforceRateLimit(`user:${session.user.id}:jobs.optimize-resume`, { limit: 10, window: '60 m' });
 
     const body = bodySchema.parse(await req.json());
+    const xpCost = getXpCost('RESUME_OPTIMIZE');
+    const actionKey = `resume-optimize:${body.jobId}:${new Date().toISOString().slice(0, 10)}`;
+
+    await spendGamificationXp({
+      userId: session.user.id,
+      amount: xpCost,
+      actionKey,
+      actionType: 'RESUME_OPTIMIZE',
+    });
+
     const { id } = await optimizeResumeForJob({
       userId: session.user.id,
       jobId: body.jobId,

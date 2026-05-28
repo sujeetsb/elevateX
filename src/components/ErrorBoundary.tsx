@@ -16,6 +16,10 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('ErrorBoundary:', error, info.componentStack);
   }
 
+  private handleRetry = () => {
+    this.setState({ hasError: false, message: '' });
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -25,13 +29,27 @@ export class ErrorBoundary extends Component<Props, State> {
         >
           <p style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.1rem' }}>We hit a snag</p>
           <p style={{ color: 'var(--cp-text-muted)', maxWidth: '28rem', fontSize: '0.9rem' }}>{this.state.message}</p>
-          <button
-            type="button"
-            className="btn-primary rounded-xl px-6 py-3"
-            onClick={() => window.location.reload()}
-          >
-            Reload app
-          </button>
+          <div className="flex flex-wrap gap-3 justify-center">
+            <button type="button" className="btn-primary rounded-xl px-6 py-3" onClick={this.handleRetry}>
+              Try again
+            </button>
+            <button
+              type="button"
+              className="rounded-xl px-6 py-3"
+              style={{ background: 'var(--cp-bg-card)', border: '1px solid var(--cp-border)', color: 'var(--cp-text-muted)' }}
+              onClick={() => { window.location.href = '/app/dashboard'; }}
+            >
+              Go to dashboard
+            </button>
+            <button
+              type="button"
+              className="rounded-xl px-6 py-3 text-sm"
+              style={{ background: 'transparent', border: '1px solid var(--cp-border)', color: 'var(--cp-text-faint)' }}
+              onClick={() => window.location.reload()}
+            >
+              Reload app
+            </button>
+          </div>
         </div>
       );
     }

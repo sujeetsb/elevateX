@@ -8,11 +8,22 @@ import { useTheme } from './ThemeContext';
 import { BrandLogo } from './BrandLogo';
 import { appNavItems } from '@/lib/navigation/app-nav';
 
-export function Sidebar() {
+export function Sidebar({
+  onNavigate,
+  navPending,
+}: {
+  onNavigate?: (path: string) => void;
+  navPending?: string | null;
+}) {
   const router = useRouter();
   const pathname = usePathname() ?? '';
   const { user, xp, level, levelName } = useGame();
   const { theme, setTheme } = useTheme();
+
+  const go = (path: string) => {
+    if (onNavigate) onNavigate(path);
+    else router.push(path);
+  };
 
   return (
     <aside
@@ -29,15 +40,17 @@ export function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-0.5" aria-label="Primary">
         {appNavItems.map(({ path, icon: Icon, label }) => {
           const isActive = pathname === path || pathname.startsWith(`${path}/`);
+          const pending = navPending === path;
           return (
             <button
               key={path}
               type="button"
-              onClick={() => router.push(path)}
+              onClick={() => go(path)}
               onMouseEnter={() => router.prefetch(path)}
               onFocus={() => router.prefetch(path)}
+              disabled={Boolean(navPending)}
               aria-current={isActive ? 'page' : undefined}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--cp-radius-md)] transition-colors duration-150 relative group"
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--cp-radius-md)] transition-colors duration-150 relative group disabled:opacity-60"
               style={{
                 color: isActive ? 'var(--sidebar-accent-foreground)' : 'var(--cp-text-muted)',
               }}
@@ -53,28 +66,28 @@ export function Sidebar() {
               )}
               <Icon size={18} strokeWidth={isActive ? 2.25 : 1.75} className="relative z-10 shrink-0" />
               <span
-                className="relative z-10 text-[0.875rem]"
+                className="relative z-10 text-[0.875rem] flex-1 text-left"
                 style={{ fontWeight: isActive ? 600 : 450 }}
               >
-                {label}
+                {pending ? 'Loading…' : label}
               </span>
             </button>
           );
         })}
       </nav>
 
-      {/* AI Mentor CTA */}
+      {/* Elevate Mentor CTA */}
       <div className="px-3 pb-3">
         <button
           type="button"
-          onClick={() => router.push('/app/mentor')}
+          onClick={() => go('/app/mentor')}
           className="w-full flex items-center gap-3 px-3 py-3 rounded-[var(--cp-radius-md)] transition-colors duration-150 bg-sidebar-accent border border-[var(--cp-border-accent)] hover:bg-[var(--cp-accent-muted)]"
-          aria-label="Open AI Mentor"
+          aria-label="Open Elevate Mentor"
         >
           <span className="text-lg">🤖</span>
           <div className="flex-1 text-left">
             <div className="text-sidebar-accent-foreground font-medium text-[0.8125rem]">
-              AI Mentor
+              Elevate Mentor
             </div>
             <div className="text-[var(--cp-text-faint)] text-[0.6875rem]">Ask anything</div>
           </div>

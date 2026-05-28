@@ -99,6 +99,36 @@
   border-radius: var(--cp-radius-md);
 }
 
+/* Resume studio + form fields — theme-aware */
+.cp-field {
+  width: 100%;
+  border-radius: var(--cp-radius-md);
+  padding: 0.5rem 0.75rem;
+  outline: none;
+  font-size: 0.82rem;
+  background: var(--cp-bg-input);
+  border: 1px solid var(--cp-border);
+  color: var(--cp-text-primary);
+}
+
+.cp-field:focus {
+  border-color: var(--cp-border-accent);
+  box-shadow: var(--cp-shadow-focus);
+}
+
+.cp-field-label {
+  color: var(--cp-text-muted);
+  font-size: 0.7rem;
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.cp-panel-nested {
+  background: var(--cp-surface-1);
+  border: 1px solid var(--cp-border-subtle);
+  border-radius: var(--cp-radius-md);
+}
+
 /* ── Code blocks ─────────────────────────────────────────── */
 .cp-code,
 .cp-code-block {

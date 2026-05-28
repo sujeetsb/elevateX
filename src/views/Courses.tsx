@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'motion/react';
 import { Sparkles, ChevronRight, Zap, Lock, Check, Plus, Search, X } from 'lucide-react';
@@ -8,17 +8,25 @@ import { useGame } from '../components/GameContext';
 import { CareerDialog } from '../components/CareerDialog';
 import { DialogTitle } from '@/components/ui/dialog';
 import { AsyncState } from '@/components/AsyncState';
+import { useProfileInsights } from '@/lib/hooks/use-profile-insights';
+import { mapInsightCoursesToRecommended } from '@/lib/insights/courses';
 import {
   isApiError,
   submitCourseGenerationRequest,
-  fetchRecommendedCourses,
   enrollInCourse,
-  type RecommendedCourse,
 } from '@/api';
 
 export function Courses() {
   const router = useRouter();
-  const { courses, addCourse, isHydrating, refresh } = useGame();
+  const { courses, addCourse, isHydrating, refresh, user } = useGame();
+  const { data: profileInsights, isLoading: recLoading, isError: recError, refetch: refetchRecs } = useProfileInsights(
+    user.profileVersion,
+    Boolean(user.email),
+  );
+  const recommendedCourses = useMemo(
+    () => mapInsightCoursesToRecommended(profileInsights?.recommendedCourses),
+    [profileInsights?.recommendedCourses],
+  );
   const [showGenerator, setShowGenerator] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generated, setGenerated] = useState(false);
@@ -31,16 +39,7 @@ export function Courses() {
   const [learningStyle, setLearningStyle] = useState('Hands-on Projects');
   const [searchQuery, setSearchQuery] = useState('');
   const [generatorError, setGeneratorError] = useState<string | null>(null);
-  const [recommendedCourses, setRecommendedCourses] = useState<RecommendedCourse[]>([]);
-  const [recLoading, setRecLoading] = useState(true);
   const [startingId, setStartingId] = useState<string | null>(null);
-
-  useEffect(() => {
-    void fetchRecommendedCourses()
-      .then(setRecommendedCourses)
-      .catch(() => setRecommendedCourses([]))
-      .finally(() => setRecLoading(false));
-  }, []);
 
   const continueCourses = useMemo(
     () => courses.filter(c => c.progress > 0 && c.progress < 100),
@@ -289,7 +288,13 @@ export function Courses() {
       {/* Recommended */}
       <div className="section-pad mb-6">
         <h3 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, marginBottom: '12px' }}>Recommended for You</h3>
-        <AsyncState loading={recLoading} empty={recommendedCourses.length === 0} emptyMessage="Recommendations will appear after profile setup.">
+        <AsyncState
+          loading={recLoading}
+          error={recError ? 'Could not load recommendations.' : null}
+          onRetry={() => void refetchRecs()}
+          empty={recommendedCourses.length === 0}
+          emptyMessage="Recommendations will appear after profile setup."
+        >
           <div className="space-y-3">
           {recommendedCourses.map((course, i) => (
             <motion.div

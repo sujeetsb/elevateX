@@ -4,6 +4,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Send, Zap, Sparkles, ChevronRight, Copy, Check, RefreshCw } from 'lucide-react';
 import { useGame } from '../components/GameContext';
+import { LowXpAlert } from '@/components/LowXpAlert';
+import { getXpCost } from '@/lib/gamification/xp-costs';
 
 interface Message {
   id: string;
@@ -237,12 +239,14 @@ function CopyButton({ text }: { text: string }) {
 // ─── Mentor component ─────────────────────────────────────────────────────────
 
 export function Mentor() {
-  const { user, addXP, xp, level, levelName, streak } = useGame();
+  const { user, xp, level, levelName, streak, refresh } = useGame();
+  const mentorXpCost = getXpCost('AI_MENTOR');
+  const [xpError, setXpError] = useState<{ required?: number; balance?: number; suggestions?: string[] } | null>(null);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
       role: 'ai',
-      content: `Hey ${user.name}! 👋 I'm your AI Career Mentor — I know your profile inside out.\n\nYou're a **${user.currentRole || 'professional'}** with ${user.experience || 'some'} of experience, targeting **${user.targetRole || 'your next role'}**. You're at Level ${level} (${levelName}) with ${xp} XP and a 🔥 ${streak}-day streak!\n\nI'm here to accelerate your career. What would you like to work on today?`,
+      content: `Hey ${user.name}! 👋 I'm your **Elevate Mentor** — I know your profile inside out.\n\nYou're a **${user.currentRole || 'professional'}** with ${user.experience || 'some'} of experience, targeting **${user.targetRole || 'your next role'}**. You're at Level ${level} (${levelName}) with ${xp} XP and a 🔥 ${streak}-day streak!\n\nI'm here to accelerate your career. What would you like to work on today?`,
       timestamp: new Date(),
     }
   ]);
@@ -302,6 +306,7 @@ export function Mentor() {
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsTyping(true);
+    setXpError(null);
 
     try {
       const res = await fetch('/api/v1/ai/mentor/messages', {
@@ -311,7 +316,15 @@ export function Mentor() {
         body: JSON.stringify({ content: userText, conversationId: conversationId ?? undefined }),
       });
       const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as { message?: string })?.message || 'Mentor request failed');
+      if (!res.ok) {
+        const err = new Error((json as { message?: string })?.message || 'Mentor request failed') as Error & {
+          code?: string;
+          details?: { required?: number; balance?: number; suggestions?: string[] };
+        };
+        err.code = (json as { code?: string })?.code;
+        err.details = (json as { details?: { required?: number; balance?: number; suggestions?: string[] } })?.details;
+        throw err;
+      }
 
       const assistant = (json as { data?: { message?: { id?: unknown; content?: unknown }; conversationId?: string } })?.data?.message;
       const newConversationId = (json as { data?: { conversationId?: string } })?.data?.conversationId;
@@ -321,21 +334,24 @@ export function Mentor() {
       const aiId = String(assistant?.id ?? Date.now() + 1);
       const aiMsg: Message | null = assistant?.content
         ? {
-            id: aiId,
-            role: 'ai',
-            content: String(assistant.content ?? ''),
-            xpGain: 15,
-            timestamp: new Date(),
-          }
+          id: aiId,
+          role: 'ai',
+          content: String(assistant.content ?? ''),
+          timestamp: new Date(),
+        }
         : null;
 
       if (aiMsg) {
         setMessages(prev => [...prev, aiMsg]);
         setLastAiMsgId(aiId);
-        addXP(15);
+        void refresh({ silent: true });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Mentor request failed';
+      const e = err as Error & { code?: string; details?: { required?: number; balance?: number; suggestions?: string[] } };
+      if (e.code === 'INSUFFICIENT_XP' && e.details) {
+        setXpError(e.details);
+      }
+      const msg = e.message || 'Mentor request failed';
       setMessages(prev => [
         ...prev,
         {
@@ -348,7 +364,7 @@ export function Mentor() {
     } finally {
       setIsTyping(false);
     }
-  }, [isTyping, conversationId, addXP]);
+  }, [isTyping, conversationId, refresh]);
 
   const regenerate = useCallback(() => {
     // Find the last user message and re-send it
@@ -368,7 +384,7 @@ export function Mentor() {
     d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <div className="app-page flex flex-col" style={{ fontFamily: "'Space Grotesk', sans-serif", height: 'calc(100dvh - 80px)' }}>
+    <div className="app-page flex flex-col" style={{ fontFamily: "'Space Grotesk', sans-serif", height: 'calc(100dvh - 64px)' }}>
       {/* Header */}
       <div className="section-pad pt-5 pb-4 shrink-0">
         <div className="flex items-center gap-4">
@@ -381,7 +397,7 @@ export function Mentor() {
               style={{ borderColor: 'var(--cp-bg-base)' }} />
           </div>
           <div>
-            <h1 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.1rem' }}>AI Career Mentor</h1>
+            <h1 style={{ color: 'var(--cp-text-primary)', fontWeight: 700, fontSize: '1.1rem' }}>Elevate Mentor</h1>
             <div className="flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
               <span style={{ color: '#10b981', fontSize: '0.75rem' }}>Active & personalized</span>
@@ -398,7 +414,7 @@ export function Mentor() {
           {[
             { label: 'Career IQ', value: '847', color: '#7c3aed' },
             { label: 'Conversations', value: String(Math.max(messages.filter(m => m.role === 'user').length, 1)), color: '#06b6d4' },
-            { label: 'XP via mentor', value: `${xp}`, color: '#f59e0b' },
+            { label: 'XP via Elevate', value: `${xp}`, color: '#f59e0b' },
           ].map(s => (
             <div key={s.label} className="flex-1 glass-card rounded-xl px-2 py-2 text-center">
               <div style={{ color: s.color, fontWeight: 700, fontSize: '0.9rem' }}>{s.value}</div>
@@ -409,7 +425,7 @@ export function Mentor() {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto section-pad" style={{ paddingBottom: '8px' }}>
+      <div className="flex-1 overflow-y-auto section-pad" style={{ paddingBottom: '40px' }}>
         <div className="space-y-4 pb-2">
           <AnimatePresence initial={false}>
             {messages.map(msg => (
@@ -546,8 +562,17 @@ export function Mentor() {
         </div>
       )}
 
-      {/* Input */}
-      <div className="section-pad pb-5 pt-3 shrink-0">
+      {/* Input — extra bottom padding for mobile nav + safe area */}
+      <div
+        className="section-pad shrink-0"
+        style={{
+          position: 'sticky',
+          // bottom: '0.3rem',
+          width: '95%',
+          margin: '0 auto',
+        }}
+      >
+        {xpError && <LowXpAlert {...xpError} className="mb-3" />}
         <div className="flex gap-3 rounded-2xl p-2"
           style={{ background: 'var(--cp-bg-elevated)', border: '1px solid var(--cp-border)' }}>
           <textarea
@@ -559,7 +584,7 @@ export function Mentor() {
                 void sendMessage(input);
               }
             }}
-            placeholder="Ask your AI mentor anything... (Shift+Enter for newline)"
+            placeholder="Ask your Elevate Mentor anything... (Shift+Enter for newline)"
             rows={1}
             className="flex-1 outline-none bg-transparent px-2 py-1.5 resize-none"
             style={{ color: 'var(--cp-text-primary)', fontSize: '0.9rem', lineHeight: 1.5, maxHeight: '120px', overflowY: 'auto' }}
@@ -584,7 +609,7 @@ export function Mentor() {
           </motion.button>
         </div>
         <p style={{ color: 'var(--cp-text-faint)', fontSize: '0.68rem', textAlign: 'center', marginTop: '6px' }}>
-          ⚡ Each conversation earns +15 XP · Powered by Gemini
+          ⚡ Each message costs −{mentorXpCost} XP · Powered by Gemini
         </p>
       </div>
     </div>
