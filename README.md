@@ -307,3 +307,7 @@ Protected routes require a signed-in session and completed onboarding (see `Layo
 | UploadThing / resume upload | **`UPLOADTHING_TOKEN`** (dashboard) or `UPLOADTHING_SECRET` + `UPLOADTHING_APP_ID`; see `src/lib/uploadthing/resolve-token.ts` |
 
 For product and UI guidelines, see `guidelines/Guidelines.md`.
+
+---
+
+**ElevateX** — Created by Sujeet Brahmankar.

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { APP_NAME } from '@/lib/brand';
+import { APP_AUTHOR, APP_NAME } from '@/lib/brand';
 
 export const metadata: Metadata = {
   title: 'About',
@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function AboutPage() {
   return (
-    <div className="aurora-bg min-h-screen" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+    <div className="aurora-bg flex-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
       <div className="max-w-2xl mx-auto px-6 py-16">
         <Link href="/" className="text-sm text-[var(--cp-text-muted)] hover:text-[var(--cp-text-primary)]">
           ← Back to home
@@ -22,6 +22,9 @@ export default function AboutPage() {
         <p className="text-[var(--cp-text-muted)] leading-relaxed">
           Our mission is to elevate every career through intelligent coaching, gamified learning,
           and data-driven insights — so you can land better roles, faster.
+        </p>
+        <p className="text-sm text-[var(--cp-text-faint)] mt-8">
+          {APP_NAME} is created by {APP_AUTHOR}.
         </p>
       </div>
     </div>

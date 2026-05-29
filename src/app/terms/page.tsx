@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function TermsPage() {
   return (
-    <div className="aurora-bg min-h-screen" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+    <div className="aurora-bg flex-1" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
       <div className="max-w-2xl mx-auto px-6 py-16">
         <Link href="/" className="text-sm text-[var(--cp-text-muted)] hover:text-[var(--cp-text-primary)]">
           ← Back to home
