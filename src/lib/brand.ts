@@ -2,6 +2,9 @@
 export const APP_NAME = 'ElevateX';
 export const APP_NAME_FULL = 'ElevateX — AI Career Guidance';
 export const APP_TAGLINE = 'Accelerate your career with AI';
+export const APP_AUTHOR = 'Sujeet Brahmankar';
+export const COPYRIGHT_YEAR = 2026;
+export const COPYRIGHT_NOTICE = `© ${COPYRIGHT_YEAR} ${APP_NAME} - ${APP_AUTHOR}. All rights reserved.`;
 export const APP_DOMAIN = 'elevatex.io';
 export const APP_URL = `https://${APP_DOMAIN}`;
 

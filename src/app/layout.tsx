@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import '@uploadthing/react/styles.css';
 import '@/styles/index.css';
+import { CopyrightFooter } from '@/components/CopyrightFooter';
 import { Providers } from './providers';
-import { APP_NAME, APP_NAME_FULL, APP_TAGLINE } from '@/lib/brand';
+import { APP_AUTHOR, APP_NAME, APP_NAME_FULL, APP_TAGLINE, APP_URL } from '@/lib/brand';
 
 export const metadata: Metadata = {
   title: {
@@ -11,6 +12,9 @@ export const metadata: Metadata = {
   },
   description: APP_TAGLINE,
   applicationName: APP_NAME,
+  authors: [{ name: APP_AUTHOR, url: APP_URL }],
+  creator: APP_AUTHOR,
+  publisher: APP_AUTHOR,
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [{ url: '/favicon.svg', type: 'image/svg+xml' }],
@@ -52,8 +56,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* eslint-disable-next-line react/no-danger */}
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body className="min-h-dvh antialiased" style={{ margin: 0 }}>
-        <Providers>{children}</Providers>
+      <body className="min-h-dvh flex flex-col antialiased" style={{ margin: 0 }}>
+        <Providers>
+          <div className="cp-root-shell flex min-h-dvh w-full min-w-0 max-w-full flex-1 flex-col overflow-x-clip">
+            <div className="flex min-h-0 min-w-0 w-full max-w-full flex-1 flex-col overflow-x-clip">{children}</div>
+            <CopyrightFooter />
+          </div>
+        </Providers>
       </body>
     </html>
   );

@@ -65,7 +65,7 @@ export function Layout({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="aurora-bg min-h-screen flex" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+    <div className="aurora-bg flex w-full min-w-0 max-w-full flex-1 flex-col overflow-x-clip" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
       <a href="#main-content" className="skip-link">
         Skip to main content
       </a>
@@ -74,7 +74,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <Sidebar onNavigate={handleNavigate} navPending={navPending} />
 
       {/* Main area — shifts right on desktop to make room for sidebar */}
-      <div className="sidebar-main-content flex-1 flex flex-col items-center" style={{ width: '100%' }}>
+      <div className="sidebar-main-content flex min-w-0 max-w-full flex-1 flex-col items-center">
         <div className="app-shell w-full" id="main-content">
           <AnimatePresence>
             {showXpBurst && (

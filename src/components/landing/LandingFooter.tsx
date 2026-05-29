@@ -2,7 +2,6 @@
 
 import { Github, Linkedin, Twitter } from 'lucide-react';
 import { BrandLogo } from '@/components/BrandLogo';
-import { APP_NAME } from '@/lib/brand';
 
 const links = [
   { href: '/about', label: 'About' },
@@ -51,10 +50,6 @@ export function LandingFooter() {
             ))}
           </div>
         </div>
-
-        <p className="text-center text-xs text-[var(--cp-text-faint)] mt-8">
-          © {new Date().getFullYear()} {APP_NAME}. All rights reserved.
-        </p>
       </div>
     </footer>
   );

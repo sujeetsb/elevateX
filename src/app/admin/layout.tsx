@@ -9,7 +9,7 @@ export default function AdminRootLayout({ children }: { children: ReactNode }) {
   const isLogin = pathname === '/admin/login';
 
   return (
-    <div className="aurora-bg min-h-screen" style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
+    <div className="aurora-bg min-h-screen" data-admin-shell style={{ fontFamily: "'Space Grotesk', sans-serif" }}>
       {!isLogin && <AdminNavbar />}
       {children}
     </div>

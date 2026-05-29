@@ -1,7 +1,7 @@
 {
   "name": "ElevateX — AI Career Guidance",
   "short_name": "ElevateX",
-  "description": "Analyze your resume, improve ATS score, discover learning paths, and get personalized job matches.",
+  "description": "Analyze your resume, improve ATS score, discover learning paths, and get personalized job matches. Created by Sujeet Brahmankar.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#09090b",
